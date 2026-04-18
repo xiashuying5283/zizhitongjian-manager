@@ -1,0 +1,127 @@
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 400px;
+}
+
+/* Drawer 内容样式 */
+.ant-drawer-body {
+  padding: 24px;
+  background: #f8fafc;
+}
+
+/* 表单样式 */
+.ant-form-item-label > label {
+  font-weight: 500;
+  color: #334155;
+}
+
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select-selector {
+  border-radius: 6px !important;
+}
+
+.ant-input:focus,
+.ant-input-affix-wrapper:focus,
+.ant-input-affix-wrapper-focused {
+  border-color: #1e3a5f !important;
+  box-shadow: 0 0 0 2px rgba(30, 58, 95, 0.1) !important;
+}
+
+.ant-select-focused .ant-select-selector {
+  border-color: #1e3a5f !important;
+  box-shadow: 0 0 0 2px rgba(30, 58, 95, 0.1) !important;
+}
+
+/* AI按钮样式 */
+.ant-btn-primary {
+  background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  box-shadow: 0 2px 4px rgba(30, 58, 95, 0.3);
+}
+
+.ant-btn-primary:hover {
+  background: linear-gradient(135deg, #2d5a87 0%, #3d7ab5 100%);
+}
+
+/* 关系区域样式 */
+.relations-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.relation-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  transition: all 0.2s ease;
+}
+
+.relation-item:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.relation-item .ant-input,
+.relation-item .ant-select-selector {
+  background: #f8fafc;
+}
+
+/* 分割线样式 */
+.ant-divider-horizontal.ant-divider-with-text {
+  margin: 24px 0 16px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* 抽屉底部按钮 */
+.ant-drawer-footer {
+  padding: 16px 24px;
+  border-top: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.ant-drawer-footer .ant-btn {
+  border-radius: 6px;
+  font-weight: 500;
+  min-width: 80px;
+}
+
+.ant-drawer-footer .ant-btn-dangerous {
+  background: #dc2626;
+  border: none;
+  color: #fff;
+}
+
+.ant-drawer-footer .ant-btn-dangerous:hover {
+  background: #b91c1c;
+}
+
+/* 模态框样式 */
+.ant-modal-content {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.ant-modal-header {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 16px 24px;
+}
+
+.ant-modal-body {
+  padding: 24px;
+}
+
+.ant-modal-footer {
+  border-top: 1px solid #e2e8f0;
+  padding: 12px 24px;
+}

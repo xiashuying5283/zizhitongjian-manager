@@ -1,0 +1,12 @@
+/* 人物管理布局 */
+.character-management {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.management-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
