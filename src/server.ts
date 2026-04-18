@@ -977,6 +977,31 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, r
 
     // dryRun模式：只返回结果，不写入数据库
     if (dryRun) {
+      // 检查关系中哪些人物已存在、哪些不存在
+      const relationshipsWithStatus = await Promise.all(
+        (extracted.relationships || []).map(async (rel) => {
+          const relResult = await pool.query(
+            `SELECT id, title, era FROM characters WHERE name = $1 OR aliases::text ILIKE $2`,
+            [rel.name, `%"${rel.name}"%`]
+          );
+          if (relResult.rows.length > 0) {
+            return {
+              ...rel,
+              exists: true,
+              characterId: relResult.rows[0].id,
+              characterTitle: relResult.rows[0].title,
+              characterEra: relResult.rows[0].era,
+            };
+          } else {
+            return {
+              ...rel,
+              exists: false,
+              characterId: null,
+            };
+          }
+        })
+      );
+
       return sendSuccess(res, {
         dryRun: true,
         characterId: character.id,
@@ -995,7 +1020,7 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, r
           aliases: extracted.aliases,
           hometown: extracted.hometown,
         },
-        relationships: extracted.relationships || [],
+        relationships: relationshipsWithStatus,
         sources: {
           tongjian_passages: tongjianCount,
         },
@@ -1114,7 +1139,17 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
   try {
     await client.query('BEGIN');
     
-    const { characterId, name, era, title, hometown, aliases, summary, relationships } = req.body;
+    const { 
+      characterId, 
+      name, 
+      era, 
+      title, 
+      hometown, 
+      aliases, 
+      summary, 
+      relationships,
+      createMissing = false  // 是否自动创建不存在的人物
+    } = req.body;
 
     if (!characterId) {
       return sendError(res, 'characterId 不能为空');
@@ -1166,49 +1201,71 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
     }
 
     // 处理关系
-    const missingCharacters: string[] = [];
+    const skippedCharacters: string[] = [];
+    const createdCharacters: string[] = [];
     const addedRelations: string[] = [];
     
     if (relationships && Array.isArray(relationships)) {
+      // 获取当前人物纪年用于创建新人物
+      const charResult = await client.query(
+        `SELECT era FROM characters WHERE id = $1`,
+        [characterId]
+      );
+      const currentEra = charResult.rows[0]?.era || '待定';
+
       for (const rel of relationships) {
-        const { name: relatedName, relation, description } = rel;
+        const { name: relatedName, relation, description, create = true } = rel;
+        
+        // 如果用户选择不创建此关系，跳过
+        if (!create) {
+          skippedCharacters.push(relatedName);
+          continue;
+        }
         
         // 查找关联人物
-        const relatedResult: QueryResult = await client.query(
-          `SELECT id FROM characters WHERE name = $1`,
-          [relatedName]
+        let relatedResult: QueryResult = await client.query(
+          `SELECT id FROM characters WHERE name = $1 OR aliases::text ILIKE $2`,
+          [relatedName, `%"${relatedName}"%`]
         );
 
-        if (relatedResult.rows.length > 0) {
-          const relatedId = relatedResult.rows[0].id;
-          
-          // 检查关系是否已存在
-          const existRel: QueryResult = await client.query(
-            `SELECT id FROM character_relations 
-             WHERE character_id = $1 AND related_character_id = $2 AND relation_type = $3`,
-            [characterId, relatedId, relation]
-          );
+        let relatedId: number;
 
-          if (existRel.rows.length === 0) {
-            // 插入新关系
-            await client.query(
-              `INSERT INTO character_relations (character_id, related_character_id, relation_type, description) 
-               VALUES ($1, $2, $3, $4)`,
-              [characterId, relatedId, relation, description || null]
-            );
-            addedRelations.push(`${relatedName}（${relation}）`);
-          }
+        if (relatedResult.rows.length > 0) {
+          relatedId = relatedResult.rows[0].id;
+        } else if (createMissing) {
+          // 自动创建不存在的人物
+          const pinyinInitial = getPinyinInitial(relatedName);
+          const firstCharPinyin = getFirstCharPinyin(relatedName);
+          const createResult = await client.query(
+            `INSERT INTO characters (name, era, pinyin_initial, first_char_pinyin, created_at, updated_at) 
+             VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id`,
+            [relatedName, era || currentEra, pinyinInitial, firstCharPinyin]
+          );
+          relatedId = createResult.rows[0].id;
+          createdCharacters.push(relatedName);
         } else {
-          // 人物不存在
-          missingCharacters.push(relatedName);
+          // 人物不存在且不自动创建，跳过
+          skippedCharacters.push(relatedName);
+          continue;
+        }
+        
+        // 检查关系是否已存在
+        const existRel: QueryResult = await client.query(
+          `SELECT id FROM character_relations 
+           WHERE character_id = $1 AND related_character_id = $2 AND relation_type = $3`,
+          [characterId, relatedId, relation]
+        );
+
+        if (existRel.rows.length === 0) {
+          // 插入新关系
+          await client.query(
+            `INSERT INTO character_relations (character_id, related_character_id, relation_type, description) 
+             VALUES ($1, $2, $3, $4)`,
+            [characterId, relatedId, relation, description || null]
+          );
+          addedRelations.push(`${relatedName}（${relation}）`);
         }
       }
-    }
-
-    // 如果有缺失人物，返回错误
-    if (missingCharacters.length > 0) {
-      await client.query('ROLLBACK');
-      return sendError(res, `以下关联人物不存在：${missingCharacters.join('、')}`, 400);
     }
 
     await client.query('COMMIT');
@@ -1216,8 +1273,10 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
     sendSuccess(res, {
       id: characterId,
       name: name,
-      updated: Object.keys(req.body).filter(k => k !== 'characterId' && k !== 'relationships'),
-      addedRelations
+      updated: Object.keys(req.body).filter(k => !['characterId', 'relationships', 'createMissing'].includes(k)),
+      addedRelations,
+      createdCharacters,
+      skippedCharacters
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1225,6 +1284,27 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
     sendError(res, '保存失败', 500);
   } finally {
     client.release();
+  }
+});
+
+// 4.5 删除人物关系
+app.delete(`${API_PREFIX}/characters/:id/relations/:relationId`, async (req: Request, res: Response) => {
+  try {
+    const { id, relationId } = req.params;
+
+    const result: QueryResult = await pool.query(
+      `DELETE FROM character_relations WHERE id = $1 AND (character_id = $2 OR related_character_id = $2) RETURNING id`,
+      [relationId, id]
+    );
+
+    if (result.rows.length === 0) {
+      return sendError(res, '关系不存在', 404);
+    }
+
+    sendSuccess(res, { id: parseInt(relationId) });
+  } catch (error) {
+    console.error('Error deleting relation:', error);
+    sendError(res, '删除关系失败', 500);
   }
 });
 
