@@ -36,6 +36,6 @@
 
 .content {
   flex: 1;
-  overflow: hidden;
+  overflow: auto;
   background: #f0f2f5;
 }

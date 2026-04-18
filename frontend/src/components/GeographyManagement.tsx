@@ -191,7 +191,7 @@ const GeographyManagement: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: 24, background: '#fff', minHeight: '100%' }}>
+    <div style={{ padding: 24, background: '#fff', height: '100%', overflow: 'auto' }}>
       <div style={{ marginBottom: 16, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
         <Input
           placeholder="搜索名称或别名..."
