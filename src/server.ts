@@ -186,17 +186,432 @@ function getFirstCharPinyin(name: string): string {
 // 统计接口
 app.get(`${API_PREFIX}/stats`, async (req: Request, res: Response) => {
   try {
-    // 获取人物数量
+    // 获取各模块数量
     const charactersResult = await pool.query('SELECT COUNT(*) as count FROM characters');
+    const positionsResult = await pool.query('SELECT COUNT(*) as count FROM official_posts');
+    const geographyResult = await pool.query('SELECT COUNT(*) as count FROM geography');
 
     sendSuccess(res, {
       characters: parseInt(charactersResult.rows[0].count) || 0,
-      positions: 0, // 待开发
-      geography: 0, // 待开发
+      positions: parseInt(positionsResult.rows[0].count) || 0,
+      geography: parseInt(geographyResult.rows[0].count) || 0,
     });
   } catch (error) {
     console.error('Error fetching stats:', error);
     sendError(res, '获取统计数据失败', 500);
+  }
+});
+
+// ==================== 地理 API ====================
+
+// 获取地理列表（分页）
+app.get(`${API_PREFIX}/geography`, async (req: Request, res: Response) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+    const name = req.query.name as string;
+    const category = req.query.category as string;
+    const dynasty = req.query.dynasty as string;
+
+    const offset = (page - 1) * limit;
+
+    // 构建查询条件
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (name) {
+      whereClause += ` AND (name ILIKE $${paramIndex} OR aliases::text ILIKE $${paramIndex})`;
+      params.push(`%${name}%`);
+      paramIndex++;
+    }
+    if (category) {
+      whereClause += ` AND category = $${paramIndex++}`;
+      params.push(category);
+    }
+    if (dynasty) {
+      whereClause += ` AND dynasty = $${paramIndex++}`;
+      params.push(dynasty);
+    }
+
+    // 查询总数
+    const countResult: QueryResult = await pool.query(
+      `SELECT COUNT(*) as total FROM geography ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].total);
+    const totalPages = Math.ceil(total / limit);
+
+    // 查询数据
+    const dataResult: QueryResult = await pool.query(
+      `SELECT * FROM geography ${whereClause} ORDER BY name LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    );
+
+    sendSuccess(res, {
+      geography: dataResult.rows.map(row => ({
+        ...row,
+        aliases: row.aliases || []
+      })),
+      total,
+      page,
+      limit,
+      totalPages
+    });
+  } catch (error) {
+    console.error('Error fetching geography:', error);
+    sendError(res, '获取地理列表失败', 500);
+  }
+});
+
+// 获取地理详情
+app.get(`${API_PREFIX}/geography/:id`, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const result: QueryResult = await pool.query(
+      'SELECT * FROM geography WHERE id = $1',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return sendError(res, '地理不存在', 404);
+    }
+
+    sendSuccess(res, {
+      ...result.rows[0],
+      aliases: result.rows[0].aliases || []
+    });
+  } catch (error) {
+    console.error('Error fetching geography:', error);
+    sendError(res, '获取地理详情失败', 500);
+  }
+});
+
+// 新增地理
+app.post(`${API_PREFIX}/geography`, async (req: Request, res: Response) => {
+  try {
+    const { name, slug, category, level, dynasty, location, lng, lat, description, aliases } = req.body;
+
+    if (!name) {
+      return sendError(res, '名称不能为空');
+    }
+
+    // 生成 slug（如果没有提供）
+    const finalSlug = slug || name.toLowerCase().replace(/\s+/g, '-');
+
+    // 检查 slug 是否已存在
+    const existResult: QueryResult = await pool.query(
+      'SELECT id FROM geography WHERE slug = $1',
+      [finalSlug]
+    );
+
+    if (existResult.rows.length > 0) {
+      return sendError(res, '该 slug 已存在');
+    }
+
+    const result: QueryResult = await pool.query(
+      `INSERT INTO geography (name, slug, category, level, dynasty, location, lng, lat, description, aliases, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+       RETURNING *`,
+      [name, finalSlug, category || null, level || null, dynasty || null, location || null, lng || null, lat || null, description || null, JSON.stringify(aliases || [])]
+    );
+
+    sendSuccess(res, { ...result.rows[0], aliases: result.rows[0].aliases || [] });
+  } catch (error) {
+    console.error('Error creating geography:', error);
+    sendError(res, '创建地理失败', 500);
+  }
+});
+
+// 更新地理
+app.put(`${API_PREFIX}/geography/:id`, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { name, slug, category, level, dynasty, location, lng, lat, description, aliases } = req.body;
+
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
+    let paramIndex = 1;
+
+    if (name !== undefined) {
+      updateFields.push(`name = $${paramIndex++}`);
+      updateValues.push(name);
+    }
+    if (slug !== undefined) {
+      updateFields.push(`slug = $${paramIndex++}`);
+      updateValues.push(slug);
+    }
+    if (category !== undefined) {
+      updateFields.push(`category = $${paramIndex++}`);
+      updateValues.push(category);
+    }
+    if (level !== undefined) {
+      updateFields.push(`level = $${paramIndex++}`);
+      updateValues.push(level);
+    }
+    if (dynasty !== undefined) {
+      updateFields.push(`dynasty = $${paramIndex++}`);
+      updateValues.push(dynasty);
+    }
+    if (location !== undefined) {
+      updateFields.push(`location = $${paramIndex++}`);
+      updateValues.push(location);
+    }
+    if (lng !== undefined) {
+      updateFields.push(`lng = $${paramIndex++}`);
+      updateValues.push(lng);
+    }
+    if (lat !== undefined) {
+      updateFields.push(`lat = $${paramIndex++}`);
+      updateValues.push(lat);
+    }
+    if (description !== undefined) {
+      updateFields.push(`description = $${paramIndex++}`);
+      updateValues.push(description);
+    }
+    if (aliases !== undefined) {
+      updateFields.push(`aliases = $${paramIndex++}`);
+      updateValues.push(JSON.stringify(aliases));
+    }
+
+    updateFields.push(`updated_at = NOW()`);
+    updateValues.push(id);
+
+    if (updateFields.length > 1) {
+      const result: QueryResult = await pool.query(
+        `UPDATE geography SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+        updateValues
+      );
+
+      if (result.rows.length === 0) {
+        return sendError(res, '地理不存在', 404);
+      }
+
+      sendSuccess(res, { ...result.rows[0], aliases: result.rows[0].aliases || [] });
+    } else {
+      sendError(res, '没有要更新的字段', 400);
+    }
+  } catch (error) {
+    console.error('Error updating geography:', error);
+    sendError(res, '更新地理失败', 500);
+  }
+});
+
+// 删除地理
+app.delete(`${API_PREFIX}/geography/:id`, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const result: QueryResult = await pool.query(
+      'DELETE FROM geography WHERE id = $1 RETURNING id, name',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return sendError(res, '地理不存在', 404);
+    }
+
+    sendSuccess(res, result.rows[0]);
+  } catch (error) {
+    console.error('Error deleting geography:', error);
+    sendError(res, '删除地理失败', 500);
+  }
+});
+
+// ==================== 官职 API ====================
+
+// 获取官职列表（分页）
+app.get(`${API_PREFIX}/positions`, async (req: Request, res: Response) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+    const name = req.query.name as string;
+    const category = req.query.category as string;
+    const dynasty = req.query.dynasty as string;
+
+    const offset = (page - 1) * limit;
+
+    // 构建查询条件
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (name) {
+      whereClause += ` AND (name ILIKE $${paramIndex} OR aliases::text ILIKE $${paramIndex})`;
+      params.push(`%${name}%`);
+      paramIndex++;
+    }
+    if (category) {
+      whereClause += ` AND category = $${paramIndex++}`;
+      params.push(category);
+    }
+    if (dynasty) {
+      whereClause += ` AND dynasty = $${paramIndex++}`;
+      params.push(dynasty);
+    }
+
+    // 查询总数
+    const countResult: QueryResult = await pool.query(
+      `SELECT COUNT(*) as total FROM official_posts ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].total);
+    const totalPages = Math.ceil(total / limit);
+
+    // 查询数据
+    const dataResult: QueryResult = await pool.query(
+      `SELECT * FROM official_posts ${whereClause} ORDER BY name LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    );
+
+    sendSuccess(res, {
+      positions: dataResult.rows.map(row => ({
+        ...row,
+        aliases: row.aliases || []
+      })),
+      total,
+      page,
+      limit,
+      totalPages
+    });
+  } catch (error) {
+    console.error('Error fetching positions:', error);
+    sendError(res, '获取官职列表失败', 500);
+  }
+});
+
+// 获取官职详情
+app.get(`${API_PREFIX}/positions/:id`, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const result: QueryResult = await pool.query(
+      'SELECT * FROM official_posts WHERE id = $1',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return sendError(res, '官职不存在', 404);
+    }
+
+    sendSuccess(res, {
+      ...result.rows[0],
+      aliases: result.rows[0].aliases || []
+    });
+  } catch (error) {
+    console.error('Error fetching position:', error);
+    sendError(res, '获取官职详情失败', 500);
+  }
+});
+
+// 新增官职
+app.post(`${API_PREFIX}/positions`, async (req: Request, res: Response) => {
+  try {
+    const { name, description, category, dynasty, rank, aliases } = req.body;
+
+    if (!name) {
+      return sendError(res, '名称不能为空');
+    }
+
+    // 检查是否已存在
+    const existResult: QueryResult = await pool.query(
+      'SELECT id FROM official_posts WHERE name = $1',
+      [name]
+    );
+
+    if (existResult.rows.length > 0) {
+      return sendError(res, '该官职已存在');
+    }
+
+    const result: QueryResult = await pool.query(
+      `INSERT INTO official_posts (name, description, category, dynasty, rank, aliases, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+       RETURNING *`,
+      [name, description || null, category || null, dynasty || null, rank || null, JSON.stringify(aliases || [])]
+    );
+
+    sendSuccess(res, { ...result.rows[0], aliases: result.rows[0].aliases || [] });
+  } catch (error) {
+    console.error('Error creating position:', error);
+    sendError(res, '创建官职失败', 500);
+  }
+});
+
+// 更新官职
+app.put(`${API_PREFIX}/positions/:id`, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { name, description, category, dynasty, rank, aliases } = req.body;
+
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
+    let paramIndex = 1;
+
+    if (name !== undefined) {
+      updateFields.push(`name = $${paramIndex++}`);
+      updateValues.push(name);
+    }
+    if (description !== undefined) {
+      updateFields.push(`description = $${paramIndex++}`);
+      updateValues.push(description);
+    }
+    if (category !== undefined) {
+      updateFields.push(`category = $${paramIndex++}`);
+      updateValues.push(category);
+    }
+    if (dynasty !== undefined) {
+      updateFields.push(`dynasty = $${paramIndex++}`);
+      updateValues.push(dynasty);
+    }
+    if (rank !== undefined) {
+      updateFields.push(`rank = $${paramIndex++}`);
+      updateValues.push(rank);
+    }
+    if (aliases !== undefined) {
+      updateFields.push(`aliases = $${paramIndex++}`);
+      updateValues.push(JSON.stringify(aliases));
+    }
+
+    updateFields.push(`updated_at = NOW()`);
+    updateValues.push(id);
+
+    if (updateFields.length > 1) {
+      const result: QueryResult = await pool.query(
+        `UPDATE official_posts SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+        updateValues
+      );
+
+      if (result.rows.length === 0) {
+        return sendError(res, '官职不存在', 404);
+      }
+
+      sendSuccess(res, { ...result.rows[0], aliases: result.rows[0].aliases || [] });
+    } else {
+      sendError(res, '没有要更新的字段', 400);
+    }
+  } catch (error) {
+    console.error('Error updating position:', error);
+    sendError(res, '更新官职失败', 500);
+  }
+});
+
+// 删除官职
+app.delete(`${API_PREFIX}/positions/:id`, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const result: QueryResult = await pool.query(
+      'DELETE FROM official_posts WHERE id = $1 RETURNING id, name',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return sendError(res, '官职不存在', 404);
+    }
+
+    sendSuccess(res, result.rows[0]);
+  } catch (error) {
+    console.error('Error deleting position:', error);
+    sendError(res, '删除官职失败', 500);
   }
 });
 

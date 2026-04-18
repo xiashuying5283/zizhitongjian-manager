@@ -115,3 +115,52 @@ export interface EnrichConfirmRequest {
     description?: string;
   }[];
 }
+
+// ==================== 地理类型 ====================
+
+export interface Geography {
+  id: number;
+  slug: string;
+  name: string;
+  aliases?: string[];
+  category?: string;
+  level?: string;
+  dynasty?: string;
+  location?: string;
+  lng?: string;
+  lat?: string;
+  description?: string;
+  stroke_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface GeographyListResponse {
+  geography: Geography[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+// ==================== 官职类型 ====================
+
+export interface Position {
+  id: number;
+  name: string;
+  description?: string;
+  category?: string;
+  dynasty?: string;
+  rank?: string;
+  aliases?: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PositionListResponse {
+  positions: Position[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}

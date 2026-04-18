@@ -6,6 +6,10 @@ import type {
   EnrichRequest,
   EnrichResponse,
   EnrichConfirmRequest,
+  Geography,
+  GeographyListResponse,
+  Position,
+  PositionListResponse,
 } from '../types';
 
 const api = axios.create({
@@ -134,5 +138,127 @@ export const getStats = async () => {
     positions: number;
     geography: number;
   }>>('/stats');
+  return response.data.data;
+};
+
+// ==================== 地理 API ====================
+
+// 获取地理列表
+export const getGeographyList = async (
+  page = 1,
+  limit = 20,
+  filters?: { name?: string; category?: string; dynasty?: string }
+): Promise<GeographyListResponse> => {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+  if (filters?.name) params.append('name', filters.name);
+  if (filters?.category) params.append('category', filters.category);
+  if (filters?.dynasty) params.append('dynasty', filters.dynasty);
+  const response = await api.get<ApiResponse<GeographyListResponse>>(`/geography?${params}`);
+  return response.data.data;
+};
+
+// 获取地理详情
+export const getGeographyDetail = async (id: number): Promise<Geography> => {
+  const response = await api.get<ApiResponse<Geography>>(`/geography/${id}`);
+  return response.data.data;
+};
+
+// 新增地理
+export const createGeography = async (data: {
+  name: string;
+  slug?: string;
+  category?: string;
+  level?: string;
+  dynasty?: string;
+  location?: string;
+  lng?: string;
+  lat?: string;
+  description?: string;
+  aliases?: string[];
+}) => {
+  const response = await api.post<ApiResponse<Geography>>('/geography', data);
+  return response.data.data;
+};
+
+// 更新地理
+export const updateGeography = async (id: number, data: Partial<{
+  name: string;
+  slug: string;
+  category: string;
+  level: string;
+  dynasty: string;
+  location: string;
+  lng: string;
+  lat: string;
+  description: string;
+  aliases: string[];
+}>) => {
+  const response = await api.put<ApiResponse<Geography>>(`/geography/${id}`, data);
+  return response.data.data;
+};
+
+// 删除地理
+export const deleteGeography = async (id: number) => {
+  const response = await api.delete<ApiResponse<{ id: number; name: string }>>(`/geography/${id}`);
+  return response.data.data;
+};
+
+// ==================== 官职 API ====================
+
+// 获取官职列表
+export const getPositionList = async (
+  page = 1,
+  limit = 20,
+  filters?: { name?: string; category?: string; dynasty?: string }
+): Promise<PositionListResponse> => {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+  if (filters?.name) params.append('name', filters.name);
+  if (filters?.category) params.append('category', filters.category);
+  if (filters?.dynasty) params.append('dynasty', filters.dynasty);
+  const response = await api.get<ApiResponse<PositionListResponse>>(`/positions?${params}`);
+  return response.data.data;
+};
+
+// 获取官职详情
+export const getPositionDetail = async (id: number): Promise<Position> => {
+  const response = await api.get<ApiResponse<Position>>(`/positions/${id}`);
+  return response.data.data;
+};
+
+// 新增官职
+export const createPosition = async (data: {
+  name: string;
+  description?: string;
+  category?: string;
+  dynasty?: string;
+  rank?: string;
+  aliases?: string[];
+}) => {
+  const response = await api.post<ApiResponse<Position>>('/positions', data);
+  return response.data.data;
+};
+
+// 更新官职
+export const updatePosition = async (id: number, data: Partial<{
+  name: string;
+  description: string;
+  category: string;
+  dynasty: string;
+  rank: string;
+  aliases: string[];
+}>) => {
+  const response = await api.put<ApiResponse<Position>>(`/positions/${id}`, data);
+  return response.data.data;
+};
+
+// 删除官职
+export const deletePosition = async (id: number) => {
+  const response = await api.delete<ApiResponse<{ id: number; name: string }>>(`/positions/${id}`);
   return response.data.data;
 };
