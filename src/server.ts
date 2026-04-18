@@ -900,11 +900,14 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, r
     }
 
     // 3. 构建 prompt
-    const SYSTEM_PROMPT = `你是一位专业的中国古代史学家，请综合利用以下信息源为人物撰写传记：
+    const SYSTEM_PROMPT = `你是一位专业的中国古代史学家，请综合以下信息源为人物撰写传记：
 
 信息来源（按可信度排序）：
-1. 《资治通鉴》原文（如有）—— 最权威的一手史料
-2. 你的历史知识库 —— 用于补充和整合
+1. 《资治通鉴》原文（如有）—— 最权威的一手史料，优先引用
+2. 百科搜索结果（如有）—— 权威的百科资料，用于补充
+3. 你的历史知识库 —— 用于进一步整合和扩展
+
+请综合以上所有来源的信息，互相印证、补充，撰写完整准确的传记。
 
 请严格按以下JSON格式输出，不要有其他内容：
 {
@@ -940,18 +943,69 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, r
 
     userContent += `请综合利用以上信息和你的历史知识，为该人物撰写完整传记。`;
 
-    // 4. 调用 OpenAI
+    // 4. 联网搜索（火山引擎 Responses API + web_search）
     const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-    const completion = await openai.chat.completions.create({
-      model,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userContent }
-      ],
-      temperature: 0.3,
-      max_tokens: 2000,
-      response_format: { type: 'json_object' }
-    });
+    const apiKey = process.env.OPENAI_API_KEY || '';
+    const baseURL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+    let searchResult = '';
+    
+    try {
+      const searchResponse = await fetch(`${baseURL}/responses`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          input: [{ role: 'user', content: `${character.name} 中国历史人物 生平 传记` }],
+          tools: [{ type: 'web_search', max_keyword: 3 }],
+        }),
+      });
+
+      if (searchResponse.ok) {
+        const searchData: any = await searchResponse.json();
+        // 提取搜索结果文本
+        searchResult = (searchData.output || [])
+          .filter((item: any) => item.type === 'message')
+          .map((item: any) => item.content?.[0]?.text || '')
+          .join('');
+        console.log(`[联网搜索] 已获取 ${searchResult.length} 字符的搜索结果`);
+        console.log(`[联网搜索] 内容预览: ${searchResult.substring(0, 300)}...`);
+      } else {
+        const errText = await searchResponse.text();
+        console.log(`[联网搜索] 失败 (${searchResponse.status}):`, errText.substring(0, 200));
+      }
+    } catch (e: any) {
+      console.log('[联网搜索] 请求失败:', e.message);
+    }
+
+    // 5. 生成传记（用 Chat Completions）
+    const finalUserContent = searchResult 
+      ? `【百科搜索结果】\n${searchResult}\n\n${userContent}`
+      : userContent;
+
+    console.log(`[生成传记] 开始调用 chat.completions, 内容长度: ${finalUserContent.length}`);
+    
+    let completion;
+    try {
+      completion = await openai.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: finalUserContent }
+        ],
+        temperature: 0.3,
+        max_tokens: 2000,
+        response_format: { type: 'json_object' }
+      });
+    } catch (apiError: any) {
+      console.error('[生成传记] API 调用失败:', apiError.message);
+      console.error('[生成传记] 错误详情:', apiError);
+      return sendError(res, `AI 生成失败: ${apiError.message}`, 500);
+    }
+
+    console.log(`[生成传记] 完成，token 使用: ${JSON.stringify(completion.usage)}`);
 
     const content = completion.choices[0].message.content;
     if (!content) {
