@@ -855,13 +855,13 @@ app.get(`${API_PREFIX}/characters/:id`, async (req: Request, res: Response) => {
   }
 });
 
-// 3. AI 补充（预览模式）
+// 3. AI 补充（从资治通鉴原文 + LLM知识库）
 app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, res: Response) => {
   try {
-    const { name, dryRun = true, userHint } = req.body;
+    const { name, dryRun = false, userHint } = req.body;
 
     if (!name) {
-      return sendError(res, '姓名不能为空');
+      return sendError(res, '请提供人物姓名');
     }
 
     // 检查 OpenAI API Key
@@ -869,99 +869,237 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, r
       return sendError(res, '未配置 OPENAI_API_KEY 环境变量', 500);
     }
 
-    // 查询当前人物信息
+    // 1. 查找人物（支持按名称或别名查找）
     const charResult: QueryResult = await pool.query(
-      `SELECT * FROM characters WHERE name = $1`,
-      [name]
+      `SELECT id, name, era, title, summary, aliases, hometown FROM characters WHERE name = $1 OR aliases::text ILIKE $2`,
+      [name, `%"${name}"%`]
     );
 
-    const current = charResult.rows[0] || {
-      era: null,
-      title: null,
-      summary: null,
-      aliases: []
-    };
-
-    // 构建 prompt
-    const prompt = `你是一个资治通鉴历史专家。请根据资治通鉴和历史资料，为历史人物"${name}"生成详细的人物传记。
-
-${userHint ? `用户补充信息：${userHint}` : ''}
-
-请以 JSON 格式返回以下信息：
-{
-  "era": "人物所属纪年（周纪/秦纪/汉纪/魏纪/晋纪/宋纪/齐纪/梁纪/陈纪/隋纪/唐纪/后梁纪/后唐纪/后晋纪/后汉纪/后周纪）",
-  "title": "主要官职或封号",
-  "summary": "详细的传记摘要（100-300字，包括生平事迹、主要成就、历史评价）",
-  "aliases": ["别名1", "别名2"],
-  "hometown": "籍贯",
-  "relationships": [
-    {
-      "name": "相关人物姓名",
-      "relation": "关系类型（配偶/子女/父母/兄弟/君臣/同僚/对手/同盟）",
-      "description": "关系说明"
+    if (charResult.rows.length === 0) {
+      return sendError(res, '未找到该人物', 404);
     }
+    const character = charResult.rows[0];
+
+    // 2. 从资治通鉴搜索相关段落
+    let passages = '';
+    let tongjianCount = 0;
+    try {
+      const paraResult: QueryResult = await pool.query(
+        `SELECT content, volume_name, year_mark FROM zizhitongjian_paragraphs 
+         WHERE content ILIKE $1 ORDER BY id LIMIT 20`,
+        [`%${character.name}%`]
+      );
+      tongjianCount = paraResult.rows.length;
+      if (paraResult.rows.length > 0) {
+        passages = paraResult.rows.map((r: any) => 
+          `【${r.volume_name}·${r.year_mark || ''}】${r.content}`
+        ).join('\n\n');
+      }
+    } catch (e) {
+      console.log('资治通鉴段落表不存在或查询失败，跳过');
+    }
+
+    // 3. 构建 prompt
+    const SYSTEM_PROMPT = `你是一位专业的中国古代史学家，请综合利用以下信息源为人物撰写传记：
+
+信息来源（按可信度排序）：
+1. 《资治通鉴》原文（如有）—— 最权威的一手史料
+2. 你的历史知识库 —— 用于补充和整合
+
+请严格按以下JSON格式输出，不要有其他内容：
+{
+  "title": "历史上真实的最主要职位，如：同中书门下三品、归德大将军、松漠都督。只保留一个最重要的职位，使用历史原称",
+  "summary": "史书传记风格摘要。包含籍贯、字号、主要官职、重要事件（含年份）、结局。极简客观，不加主观评价。时间线要清晰。",
+  "aliases": ["别名1", "别名2"],
+  "hometown": "籍贯，如：营州、陕州等",
+  "era": "所属纪年，如：周纪、秦纪、汉纪、晋纪、隋纪、唐纪、后周纪等",
+  "relationships": [
+    {"name": "相关人物姓名", "relation": "关系类型", "description": "关系说明"}
   ]
 }
 
-注意：
-1. 所有字段都必须填写，如果不确定可以填写"待考"
-2. relationships 最多返回 5 个最重要的关系
-3. 只返回 JSON，不要其他解释文字`;
+注意事项：
+1. title只用历史上真实存在的官职名称，保留最重要的一个即可
+2. summary要精炼但完整，关键事件要标注年份
+3. aliases包含字、号、别称、可汗号等
+4. relationships提取与此人相关的重要人物，如亲属、君臣、敌对、盟友等
+5. era必须从以下选择：周纪、秦纪、汉纪、魏纪、晋纪、宋纪、齐纪、梁纪、陈纪、隋纪、唐纪、后梁纪、后唐纪、后晋纪、后汉纪、后周纪
+6. 只返回JSON`;
 
-    // 调用 OpenAI API
+    let userContent = `人物：${character.name}\n当前纪年：${character.era || '未知'}\n当前title：${character.title || '无'}\n当前summary：${character.summary || '无'}\n当前aliases：${character.aliases ? JSON.stringify(character.aliases) : '无'}\n\n`;
+
+    if (passages) {
+      userContent += `【资治通鉴原文】\n${passages}\n\n`;
+    } else {
+      userContent += `【资治通鉴原文】\n（未找到相关记载）\n\n`;
+    }
+
+    if (userHint) {
+      userContent += `【用户补充信息】\n${userHint}\n\n`;
+    }
+
+    userContent += `请综合利用以上信息和你的历史知识，为该人物撰写完整传记。`;
+
+    // 4. 调用 OpenAI
     const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
     const completion = await openai.chat.completions.create({
-      model: model,
+      model,
       messages: [
-        {
-          role: 'system',
-          content: '你是一个专业的中国古代史研究专家，精通资治通鉴。你的任务是为历史人物生成准确的传记信息。'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userContent }
       ],
-      temperature: 0.7,
+      temperature: 0.3,
       max_tokens: 2000,
       response_format: { type: 'json_object' }
     });
 
     const content = completion.choices[0].message.content;
-    
     if (!content) {
       return sendError(res, 'AI 未返回有效内容', 500);
     }
 
-    // 解析 AI 返回的 JSON
-    let aiData: any;
+    // 5. 解析结果
+    let extracted: {
+      title: string | null;
+      summary: string | null;
+      aliases: string[];
+      hometown: string | null;
+      era: string | null;
+      relationships: Array<{ name: string; relation: string; description: string }>;
+    };
+
     try {
-      aiData = JSON.parse(content);
+      extracted = JSON.parse(content);
     } catch (e) {
       console.error('Failed to parse AI response:', content);
       return sendError(res, 'AI 返回格式错误', 500);
     }
 
-    const proposed = {
-      era: aiData.era || current.era || '待定',
-      title: aiData.title || current.title || null,
-      summary: aiData.summary || current.summary || null,
-      aliases: aiData.aliases || current.aliases || [],
-      hometown: aiData.hometown || null
-    };
+    // dryRun模式：只返回结果，不写入数据库
+    if (dryRun) {
+      return sendSuccess(res, {
+        dryRun: true,
+        characterId: character.id,
+        characterName: character.name,
+        current: {
+          era: character.era,
+          title: character.title,
+          summary: character.summary,
+          aliases: character.aliases,
+          hometown: character.hometown,
+        },
+        proposed: {
+          era: extracted.era || character.era,
+          title: extracted.title,
+          summary: extracted.summary,
+          aliases: extracted.aliases,
+          hometown: extracted.hometown,
+        },
+        relationships: extracted.relationships || [],
+        sources: {
+          tongjian_passages: tongjianCount,
+        },
+      });
+    }
 
-    const relationships = aiData.relationships || [];
+    // 6. 写入模式：直接更新数据库
+    const updateFields: string[] = ['updated_at = NOW()'];
+    const updateParams: any[] = [];
+    let paramIndex = 1;
+
+    if (extracted.title) {
+      updateFields.push(`title = $${paramIndex++}`);
+      updateParams.push(extracted.title);
+    }
+    if (extracted.summary) {
+      updateFields.push(`summary = $${paramIndex++}`);
+      updateParams.push(extracted.summary);
+    }
+    if (extracted.aliases && extracted.aliases.length > 0) {
+      updateFields.push(`aliases = $${paramIndex++}`);
+      updateParams.push(JSON.stringify(extracted.aliases));
+    }
+    if (extracted.hometown) {
+      updateFields.push(`hometown = $${paramIndex++}`);
+      updateParams.push(extracted.hometown);
+    }
+    if (extracted.era) {
+      updateFields.push(`era = $${paramIndex++}`);
+      updateParams.push(extracted.era);
+    }
+
+    if (updateParams.length > 0) {
+      updateParams.push(character.id);
+      await pool.query(
+        `UPDATE characters SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`,
+        updateParams
+      );
+    }
+
+    // 7. 处理人物关系
+    const addedRelations: Array<{ name: string; relation: string; found: boolean; created: boolean }> = [];
+    
+    for (const rel of extracted.relationships || []) {
+      const relResult = await pool.query(
+        `SELECT id FROM characters WHERE name = $1 OR aliases::text ILIKE $2`,
+        [rel.name, `%"${rel.name}"%`]
+      );
+      
+      let relatedId: number;
+      let created = false;
+      
+      if (relResult.rows.length > 0) {
+        relatedId = relResult.rows[0].id;
+      } else {
+        // 自动创建不存在的人物
+        const pinyinInitial = getPinyinInitial(rel.name);
+        const firstCharPinyin = getFirstCharPinyin(rel.name);
+        const createResult = await pool.query(
+          `INSERT INTO characters (name, era, pinyin_initial, first_char_pinyin, created_at, updated_at) 
+           VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id`,
+          [rel.name, extracted.era || character.era || '待定', pinyinInitial, firstCharPinyin]
+        );
+        relatedId = createResult.rows[0].id;
+        created = true;
+      }
+      
+      // 检查关系是否已存在
+      const existResult = await pool.query(
+        `SELECT id FROM character_relations WHERE character_id = $1 AND related_character_id = $2`,
+        [character.id, relatedId]
+      );
+      
+      if (existResult.rows.length === 0) {
+        await pool.query(
+          `INSERT INTO character_relations (character_id, related_character_id, relation_type, description, created_at)
+           VALUES ($1, $2, $3, $4, NOW())`,
+          [character.id, relatedId, rel.relation, rel.description]
+        );
+      }
+      
+      addedRelations.push({ 
+        name: rel.name, 
+        relation: rel.relation, 
+        found: true, 
+        created 
+      });
+    }
 
     sendSuccess(res, {
-      dryRun,
-      current: {
-        era: current.era,
-        title: current.title,
-        summary: current.summary,
-        aliases: current.aliases || []
+      dryRun: false,
+      character: {
+        id: character.id,
+        name: character.name,
+        title: extracted.title || character.title,
+        summary: extracted.summary || character.summary,
+        aliases: extracted.aliases,
+        hometown: extracted.hometown,
+        era: extracted.era || character.era,
       },
-      proposed,
-      relationships
+      sources: {
+        tongjian_passages: tongjianCount,
+      },
+      relationships: addedRelations,
     });
   } catch (error) {
     console.error('Error enriching character:', error);
