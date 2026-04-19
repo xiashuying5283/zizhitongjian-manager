@@ -23,8 +23,9 @@ import {
   confirmEnrich,
   deleteCharacter,
   getBaiduBaike,
+  getWikiBaike,
 } from '../api';
-import type { BaikeResult } from '../api';
+import type { BaikeResult, WikiResult } from '../api';
 import './EditPanel.css';
 
 const { TextArea } = Input;
@@ -87,6 +88,10 @@ const EditPanel: React.FC<EditPanelProps> = ({
   const [baiduLoading, setBaiduLoading] = useState(false);
   const [baiduResult, setBaiduResult] = useState<BaikeResult | null>(null);
   const [baiduError, setBaiduError] = useState('');
+  const [wikiQuery, setWikiQuery] = useState('');
+  const [wikiLoading, setWikiLoading] = useState(false);
+  const [wikiResult, setWikiResult] = useState<WikiResult | null>(null);
+  const [wikiError, setWikiError] = useState('');
 
   useEffect(() => {
     if (visible && characterId) {
@@ -127,6 +132,7 @@ const EditPanel: React.FC<EditPanelProps> = ({
       ];
       setRelations(allRelations);
       setBaiduQuery(data.name);
+      setWikiQuery(data.name);
     } catch (error) {
       message.error('加载人物详情失败');
     } finally {
@@ -443,6 +449,119 @@ const EditPanel: React.FC<EditPanelProps> = ({
                     </Collapse>
                   )}
                   {!baiduResult.summary && baiduResult.sections.length === 0 && (
+                    <div className="baidu-empty">未能提取到正文内容</div>
+                  )}
+                </div>
+              )}
+            </Card>
+
+            <Card 
+              size="small" 
+              title={
+                <span>
+                  <GlobalOutlined style={{ marginRight: 8, color: '#5b21b6' }} />
+                  维基百科查询
+                </span>
+              }
+              className="wiki-card"
+              extra={
+                <Space size={4}>
+                  {wikiResult && (
+                    <Tooltip title="在新标签页打开">
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={<LinkOutlined />}
+                        onClick={() => window.open(wikiResult.url, '_blank')}
+                      />
+                    </Tooltip>
+                  )}
+                </Space>
+              }
+            >
+              <div className="baidu-search-row">
+                <Input.Search
+                  placeholder="输入人物名查询维基百科..."
+                  value={wikiQuery}
+                  onChange={(e) => setWikiQuery(e.target.value)}
+                  onSearch={async (value) => {
+                    if (!value?.trim()) return;
+                    setWikiLoading(true);
+                    setWikiError('');
+                    setWikiResult(null);
+                    try {
+                      const data = await getWikiBaike(value.trim());
+                      setWikiResult(data);
+                    } catch (err: any) {
+                      setWikiError(err.response?.data?.error || '查询失败，可能无法连接维基百科');
+                    } finally {
+                      setWikiLoading(false);
+                    }
+                  }}
+                  enterButton={
+                    <Button type="primary" size="small" icon={<SearchOutlined />} loading={wikiLoading}>
+                      查询
+                    </Button>
+                  }
+                />
+                {wikiResult && (
+                  <Tooltip title="重新查询">
+                    <Button
+                      size="small"
+                      icon={<ReloadOutlined />}
+                      onClick={async () => {
+                        if (!wikiQuery.trim()) return;
+                        setWikiLoading(true);
+                        setWikiError('');
+                        try {
+                          const data = await getWikiBaike(wikiQuery.trim());
+                          setWikiResult(data);
+                        } catch (err: any) {
+                          setWikiError(err.response?.data?.error || '查询失败');
+                        } finally {
+                          setWikiLoading(false);
+                        }
+                      }}
+                    />
+                  </Tooltip>
+                )}
+              </div>
+
+              {wikiLoading && (
+                <div className="baidu-loading">
+                  <Spin size="small" /> <span style={{ marginLeft: 8, color: '#8c8c8c' }}>正在查询维基百科...</span>
+                </div>
+              )}
+
+              {wikiError && (
+                <Alert type="error" message={wikiError} style={{ marginTop: 12 }} showIcon closable onClose={() => setWikiError('')} />
+              )}
+
+              {wikiResult && !wikiLoading && (
+                <div className="baidu-content">
+                  {!wikiResult.found && (
+                    <Alert type="warning" message="未找到该词条" description="可能需要更精确的名称，试试在新标签页中搜索" style={{ marginBottom: 12 }} showIcon />
+                  )}
+                  {wikiResult.summary && (
+                    <div className="wiki-summary">
+                      <div className="baidu-summary-label">摘要</div>
+                      <div className="baidu-summary-text">{wikiResult.summary}</div>
+                    </div>
+                  )}
+                  {wikiResult.sections.length > 0 && (
+                    <Collapse
+                      size="small"
+                      className="baidu-sections"
+                      defaultActiveKey={wikiResult.sections.slice(0, 2).map((_, i) => String(i))}
+                    >
+                      {wikiResult.sections.map((section, idx) => (
+                        <Collapse.Panel header={section.title} key={String(idx)}>
+                          <div className="baidu-section-text">{section.content}</div>
+                        </Collapse.Panel>
+                      ))}
+                    </Collapse>
+                  )}
+                  {!wikiResult.summary && wikiResult.sections.length === 0 && (
                     <div className="baidu-empty">未能提取到正文内容</div>
                   )}
                 </div>

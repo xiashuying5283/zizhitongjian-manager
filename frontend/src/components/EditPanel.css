@@ -223,3 +223,37 @@
   padding: 16px;
   font-size: 13px;
 }
+
+/* 维基百科卡片样式 */
+.wiki-card {
+  margin-bottom: 20px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.wiki-card .ant-card-head {
+  background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
+  border-bottom: 1px solid #e2e8f0;
+  border-radius: 8px 8px 0 0;
+  min-height: 40px;
+  padding: 8px 12px;
+}
+
+.wiki-card .ant-card-head-title {
+  padding: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #334155;
+}
+
+.wiki-card .ant-card-body {
+  padding: 12px;
+}
+
+.wiki-summary {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #f5f3ff;
+  border-radius: 6px;
+  border-left: 3px solid #7c3aed;
+}

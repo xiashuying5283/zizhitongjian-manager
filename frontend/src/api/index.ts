@@ -284,6 +284,20 @@ export const getBaiduBaike = async (query: string): Promise<BaikeResult> => {
   return response.data.data;
 };
 
+// 获取维基百科内容（纯文本）
+export interface WikiResult {
+  found: boolean;
+  title: string;
+  summary: string;
+  sections: BaikeSection[];
+  url: string;
+}
+
+export const getWikiBaike = async (query: string): Promise<WikiResult> => {
+  const response = await api.get<ApiResponse<WikiResult>>(`/wiki-baike?q=${encodeURIComponent(query)}`);
+  return response.data.data;
+};
+
 // 获取所有表
 export const getTables = async () => {
   const response = await api.get<ApiResponse<Array<{ table_name: string; column_count: string }>>>('/dba/tables');

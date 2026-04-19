@@ -151,6 +151,135 @@ app.get(`${API_PREFIX}/check-auth`, (req: Request, res: Response) => {
   sendSuccess(res, { authenticated: true, username: session.username });
 });
 
+// ============ 维基百科代理接口（无需认证） ============
+
+app.get(`${API_PREFIX}/wiki-baike`, async (req: Request, res: Response) => {
+  try {
+    const query = req.query.q as string;
+    if (!query) {
+      return sendError(res, '请提供查询关键词');
+    }
+
+    const wikiUrl = `https://zh.wikipedia.org/wiki/${encodeURIComponent(query)}`;
+
+    // 使用 MediaWiki API 获取纯文本
+    const apiUrl = `https://zh.wikipedia.org/w/api.php?` + new URLSearchParams({
+      action: 'query',
+      titles: query,
+      prop: 'extracts',
+      explaintext: '1',
+      format: 'json',
+      redirects: '1',
+    }).toString();
+
+    const response = await fetch(apiUrl, {
+      headers: {
+        'User-Agent': 'TongjianRenvuBot/1.0 (https://github.com/tongjianrenwu; educational use)',
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      return sendError(res, `维基百科请求失败: ${response.status}`, 502);
+    }
+
+    const data: any = await response.json();
+    const pages = data.query?.pages;
+
+    if (!pages) {
+      return sendSuccess(res, {
+        found: false,
+        title: query,
+        summary: '',
+        sections: [],
+        url: wikiUrl,
+      });
+    }
+
+    // pages 是一个对象，key 是页面 ID（-1 表示不存在）
+    const pageId = Object.keys(pages)[0];
+    const page = pages[pageId];
+
+    // pageId 为 "-1" 表示词条不存在
+    if (pageId === '-1' || page.missing !== undefined) {
+      return sendSuccess(res, {
+        found: false,
+        title: query,
+        summary: '',
+        sections: [],
+        url: wikiUrl,
+      });
+    }
+
+    const fullText: string = page.extract || '';
+    if (!fullText) {
+      return sendSuccess(res, {
+        found: true,
+        title: page.title || query,
+        summary: '',
+        sections: [],
+        url: wikiUrl,
+      });
+    }
+
+    // 解析纯文本：按 === / == 分割章节
+    const sections: Array<{ title: string; content: string }> = [];
+    const lines = fullText.split('\n');
+    let currentTitle = '';
+    let currentContent: string[] = [];
+    let summaryLines: string[] = [];
+
+    for (const line of lines) {
+      const h2Match = line.match(/^==\s*(.+?)\s*==$/);
+      const h3Match = line.match(/^===\s*(.+?)\s*===$/);
+
+      if (h2Match || h3Match) {
+        // 遇到新章节标题，保存之前的内容
+        if (currentTitle === '' && currentContent.length === 0) {
+          // 第一个标题之前的内容就是摘要
+          summaryLines = [...currentContent];
+        } else if (currentTitle) {
+          sections.push({ title: currentTitle, content: currentContent.join('\n').trim() });
+        }
+        currentTitle = h2Match ? h2Match[1] : h3Match![1];
+        currentContent = [];
+      } else {
+        currentContent.push(line);
+      }
+    }
+
+    // 处理最后一个章节
+    if (currentTitle) {
+      sections.push({ title: currentTitle, content: currentContent.join('\n').trim() });
+    } else {
+      // 没有章节标题，全部内容作为摘要
+      summaryLines = [...currentContent];
+    }
+
+    // 如果第一个标题之前有内容且 summaryLines 为空，从 sections 外提取
+    if (summaryLines.length === 0 && sections.length > 0) {
+      // 检查 fullText 的开头是否有摘要（在第一个 == 之前）
+      const firstSectionIdx = fullText.search(/\n==/);
+      if (firstSectionIdx > 0) {
+        summaryLines = [fullText.substring(0, firstSectionIdx).trim()];
+      }
+    }
+
+    const summary = summaryLines.join('\n').trim();
+
+    sendSuccess(res, {
+      found: true,
+      title: page.title || query,
+      summary,
+      sections: sections.filter(s => s.content),
+      url: wikiUrl,
+    });
+  } catch (error: any) {
+    console.error('Error proxying wiki:', error);
+    sendError(res, `获取维基百科失败: ${error.message}`, 500);
+  }
+});
+
 // 对其他所有 API 路由应用认证中间件
 app.use(`${API_PREFIX}/*`, authMiddleware);
 
@@ -1581,18 +1710,35 @@ app.get(`${API_PREFIX}/baidu-baike`, async (req: Request, res: Response) => {
 
     const html = await response.text();
 
-    // 检查是否被重定向到了搜索页（词条不存在）
-    if (html.includes('百度百科——全球最大中文百科全书') && !html.includes('lemma-summary') && !html.includes('para-title')) {
+    // 检测词条是否真的存在：
+    // 1. 百科词条页一定包含 lemmaWgt 或 lemma-title 或 J-lemma-info
+    // 2. 搜索结果页/错误页不包含这些标志
+    const hasLemmaContent = html.includes('lemma-summary') 
+      || html.includes('lemma-title') 
+      || html.includes('J-lemma-info')
+      || html.includes('para-title')
+      || html.includes('class="para"')
+      || html.includes('basic-info');
+
+    // 多义词消歧页检测（有多个可选义项）
+    const isDisambig = html.includes('polysemant-list') || html.includes('disambiguation');
+
+    if (!hasLemmaContent) {
+      // 词条不存在，返回 found: false，不会 404
       return sendSuccess(res, {
         found: false,
         title: query,
-        summary: '未找到该词条，可能需要更精确的名称。请尝试在新标签页中搜索。',
+        summary: '',
         sections: [],
         url: `https://baike.baidu.com/item/${encodeURIComponent(query)}`,
+        hint: '未找到该词条。可能是名称不够精确，或者百度百科暂无收录。可以点击右上角链接在新标签页中搜索。',
       });
     }
 
     const extracted = extractTextFromHtml(html);
+
+    // 如果提取到的内容为空（页面结构变了等），也标记 found 但给提示
+    const hasContent = extracted.summary || extracted.sections.length > 0;
 
     sendSuccess(res, {
       found: true,
@@ -1600,6 +1746,9 @@ app.get(`${API_PREFIX}/baidu-baike`, async (req: Request, res: Response) => {
       summary: extracted.summary,
       sections: extracted.sections,
       url: baikeUrl,
+      hint: isDisambig 
+        ? '该词条为多义词消歧页，可能需要更精确的名称（如加朝代、职位等限定词）。' 
+        : (!hasContent ? '词条已找到，但未能自动提取正文内容，建议在新标签页中查看。' : ''),
     });
   } catch (error: any) {
     console.error('Error proxying baidu baike:', error);
