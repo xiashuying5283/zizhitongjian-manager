@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Table, Input, Button, message, Tabs, Spin, Tag, Typography, Empty } from 'antd';
+import { Card, Table, Input, Button, message, Tabs, Spin, Tag, Typography, Empty, Modal } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
-import { PlayCircleOutlined, ReloadOutlined, TableOutlined, FormatPainterOutlined, PlusOutlined, CloseOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, ReloadOutlined, TableOutlined, FormatPainterOutlined, PlusOutlined, CloseOutlined, WarningOutlined } from '@ant-design/icons';
 import { getTables, getTableInfo, executeQuery } from '../api';
 import './DbAdmin.css';
 
@@ -247,7 +247,7 @@ const DbAdmin: React.FC = () => {
   };
 
   // 执行 SQL
-  const executeSql = async () => {
+  const executeSql = async (confirmWrite = false) => {
     const currentTab = getCurrentTab();
     if (!currentTab) return;
     
@@ -257,15 +257,32 @@ const DbAdmin: React.FC = () => {
       message.warning('请输入 SQL 语句');
       return;
     }
+
+    // 检测是否为写操作
+    const sqlUpper = sqlToExecute.trim().toUpperCase();
+    const isWrite = ['INSERT', 'UPDATE', 'DELETE'].some(kw => sqlUpper.startsWith(kw));
+
+    if (isWrite && !confirmWrite) {
+      Modal.confirm({
+        title: '确认执行写操作',
+        icon: <WarningOutlined />,
+        content: <div><p>即将执行写操作，此操作会直接修改数据：</p><pre style={{ maxHeight: 200, overflow: 'auto', background: '#f5f5f5', padding: 8, borderRadius: 4, fontSize: 12 }}>{sqlToExecute.substring(0, 500)}{sqlToExecute.length > 500 ? '...' : ''}</pre></div>,
+        okText: '确认执行',
+        okType: 'danger',
+        cancelText: '取消',
+        onOk: () => executeSql(true),
+      });
+      return;
+    }
     
     updateCurrentTab({ loading: true });
     try {
-      const result = await executeQuery(sqlToExecute);
+      const result = await executeQuery(sqlToExecute, confirmWrite);
       updateCurrentTab({ result, loading: false });
-      message.success(`查询成功，返回 ${result.rowCount} 行，耗时 ${result.elapsed}ms`);
+      message.success(`执行成功，${result.rowCount} 行受影响，耗时 ${result.elapsed}ms`);
     } catch (error: any) {
       updateCurrentTab({ loading: false });
-      message.error(error.response?.data?.error || '查询失败');
+      message.error(error.response?.data?.error || '执行失败');
     }
   };
 
@@ -355,7 +372,7 @@ const DbAdmin: React.FC = () => {
           onChange={(e) => updateCurrentTab({ sql: e.target.value })}
           onSelect={handleSelectChange}
           onBlur={handleSelectChange}
-          placeholder="输入 SQL 查询语句（仅支持 SELECT/EXPLAIN/SHOW），选中部分可单独执行..."
+          placeholder="输入 SQL 语句（支持 SELECT/INSERT/UPDATE/DELETE），选中部分可单独执行..."
           style={{ fontFamily: 'monospace', height: 'calc(100% - 44px)', resize: 'none' }}
         />
         <div className="sql-actions">
@@ -366,7 +383,7 @@ const DbAdmin: React.FC = () => {
               e.preventDefault();
               saveSelection();
             }}
-            onClick={executeSql}
+            onClick={() => executeSql()}
             loading={tab.loading}
           >
             {hasSelection ? '执行选中的查询' : '执行查询'}

@@ -14,6 +14,7 @@ import {
   Tooltip,
   Alert,
   Collapse,
+  AutoComplete,
 } from 'antd';
 import { DeleteOutlined, PlusOutlined, RobotOutlined, SearchOutlined, GlobalOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { CharacterDetail, Relation } from '../types';
@@ -460,7 +461,7 @@ const EditPanel: React.FC<EditPanelProps> = ({
               title={
                 <span>
                   <GlobalOutlined style={{ marginRight: 8, color: '#5b21b6' }} />
-                  维基百科查询
+                  维基百科查询（需科学上网）
                 </span>
               }
               className="wiki-card"
@@ -628,12 +629,13 @@ const EditPanel: React.FC<EditPanelProps> = ({
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', width: 100 }}>
                     <span style={{ color: '#ff4d4f', marginRight: 4 }}>*</span>
-                    <Select
+                    <AutoComplete
                       placeholder="关系类型"
                       value={rel.relation || undefined}
                       onChange={(value) => updateRelation(index, 'relation', value)}
                       options={relationOptions}
                       style={{ flex: 1 }}
+                      filterOption={(input, option) => (option?.value as string)?.includes(input)}
                       status={rel.relation === '' && rel.name ? 'error' : undefined}
                     />
                   </div>

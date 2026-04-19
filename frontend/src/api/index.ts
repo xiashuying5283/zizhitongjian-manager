@@ -321,12 +321,13 @@ export const getTableInfo = async (tableName: string) => {
 };
 
 // 执行 SQL 查询
-export const executeQuery = async (sql: string) => {
+export const executeQuery = async (sql: string, confirm = false) => {
+  const url = confirm ? '/dba/query?confirm=1' : '/dba/query';
   const response = await api.post<ApiResponse<{
     rows: any[];
     rowCount: number;
     fields: string[];
     elapsed: number;
-  }>>('/dba/query', { sql });
+  }>>(url, { sql });
   return response.data.data;
 };

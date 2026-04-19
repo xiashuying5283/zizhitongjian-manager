@@ -753,10 +753,10 @@ app.post(`${API_PREFIX}/characters`, async (req: Request, res: Response) => {
       return sendError(res, '姓名不能为空');
     }
 
-    // 检查是否已存在
+    // 检查是否已存在（同名+同title视为同一人物）
     const existResult: QueryResult = await pool.query(
-      'SELECT id FROM characters WHERE name = $1',
-      [name]
+      'SELECT id FROM characters WHERE name = $1 AND (title = $2 OR (title IS NULL AND $2 IS NULL))',
+      [name, title || null]
     );
 
     if (existResult.rows.length > 0) {
@@ -1818,7 +1818,7 @@ app.get(`${API_PREFIX}/dba/tables/:name`, async (req: Request, res: Response) =>
   }
 });
 
-// 执行 SQL 查询（只读）
+// 执行 SQL 查询
 app.post(`${API_PREFIX}/dba/query`, async (req: Request, res: Response) => {
   try {
     const { sql } = req.body;
@@ -1827,13 +1827,23 @@ app.post(`${API_PREFIX}/dba/query`, async (req: Request, res: Response) => {
       return sendError(res, '请提供 SQL 语句');
     }
     
-    // 简单的安全检查：只允许 SELECT, EXPLAIN, SHOW
+    // 安全检查：禁止危险操作
     const sqlUpper = sql.trim().toUpperCase();
-    const allowedPrefixes = ['SELECT', 'EXPLAIN', 'SHOW'];
-    const isAllowed = allowedPrefixes.some(prefix => sqlUpper.startsWith(prefix));
+    const forbidden = ['DROP ', 'TRUNCATE ', 'ALTER ', 'CREATE ', 'GRANT ', 'REVOKE '];
+    if (forbidden.some(kw => sqlUpper.includes(kw))) {
+      return sendError(res, '不允许执行 DDL 操作（DROP/TRUNCATE/ALTER/CREATE/GRANT/REVOKE）');
+    }
     
+    const allowedPrefixes = ['SELECT', 'EXPLAIN', 'SHOW', 'INSERT', 'UPDATE', 'DELETE'];
+    const isAllowed = allowedPrefixes.some(prefix => sqlUpper.startsWith(prefix));
     if (!isAllowed) {
-      return sendError(res, '只允许执行 SELECT, EXPLAIN, SHOW 查询');
+      return sendError(res, '只允许执行 SELECT, INSERT, UPDATE, DELETE, EXPLAIN, SHOW');
+    }
+
+    // 写操作需要确认参数
+    const isWrite = ['INSERT', 'UPDATE', 'DELETE'].some(prefix => sqlUpper.startsWith(prefix));
+    if (isWrite && !req.query.confirm) {
+      return sendError(res, '写操作需加 ?confirm=1 参数确认');
     }
     
     // 执行查询
