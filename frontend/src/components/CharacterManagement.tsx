@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import AlphabetSidebar from './AlphabetSidebar';
 import CharacterList from './CharacterList';
 import EditPanel from './EditPanel';
@@ -36,6 +36,7 @@ const CharacterManagement: React.FC = () => {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [panelVisible, setPanelVisible] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  const pendingSelectIdRef = useRef<number | null>(null);
 
   const handleLetterClick = useCallback(async (letter: string, saveToStorage = true) => {
     setCurrentLetter(letter);
@@ -106,13 +107,24 @@ const CharacterManagement: React.FC = () => {
     saveState({ letter: currentLetter || undefined, q: searchQuery || undefined, era: eraFilter || undefined });
   }, [currentLetter, searchQuery, eraFilter]);
 
-  const handleSuccess = useCallback(() => {
+  const handleSuccess = useCallback((keepSelection = false) => {
+    if (keepSelection && selectedId) {
+      pendingSelectIdRef.current = selectedId;
+    }
     if (currentLetter) {
       handleLetterClick(currentLetter, false);
     } else if (searchQuery) {
       handleSearch(searchQuery, false);
     }
-  }, [currentLetter, searchQuery, handleLetterClick, handleSearch]);
+  }, [currentLetter, searchQuery, handleLetterClick, handleSearch, selectedId]);
+
+  // 数据加载完成后恢复选中状态
+  useEffect(() => {
+    if (!loading && pendingSelectIdRef.current) {
+      setSelectedId(pendingSelectIdRef.current);
+      pendingSelectIdRef.current = null;
+    }
+  }, [loading]);
 
   // 监听人物创建事件
   useEffect(() => {

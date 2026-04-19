@@ -14,7 +14,7 @@ import type {
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 60000,
+  timeout: 300000, // 5 分钟，AI 生成长内容需要较长时间
   headers: {
     'Content-Type': 'application/json',
   },
@@ -260,5 +260,59 @@ export const updatePosition = async (id: number, data: Partial<{
 // 删除官职
 export const deletePosition = async (id: number) => {
   const response = await api.delete<ApiResponse<{ id: number; name: string }>>(`/positions/${id}`);
+  return response.data.data;
+};
+
+// ==================== DBA 数据库管理 API ====================
+
+// 获取百度百科内容（纯文本）
+export interface BaikeSection {
+  title: string;
+  content: string;
+}
+
+export interface BaikeResult {
+  found: boolean;
+  title: string;
+  summary: string;
+  sections: BaikeSection[];
+  url: string;
+}
+
+export const getBaiduBaike = async (query: string): Promise<BaikeResult> => {
+  const response = await api.get<ApiResponse<BaikeResult>>(`/baidu-baike?q=${encodeURIComponent(query)}`);
+  return response.data.data;
+};
+
+// 获取所有表
+export const getTables = async () => {
+  const response = await api.get<ApiResponse<Array<{ table_name: string; column_count: string }>>>('/dba/tables');
+  return response.data.data;
+};
+
+// 获取表结构
+export const getTableInfo = async (tableName: string) => {
+  const response = await api.get<ApiResponse<{
+    columns: Array<{
+      column_name: string;
+      data_type: string;
+      character_maximum_length: number | null;
+      is_nullable: string;
+      column_default: string | null;
+    }>;
+    indexes: Array<{ indexname: string; indexdef: string }>;
+    rowCount: number;
+  }>>(`/dba/tables/${tableName}`);
+  return response.data.data;
+};
+
+// 执行 SQL 查询
+export const executeQuery = async (sql: string) => {
+  const response = await api.post<ApiResponse<{
+    rows: any[];
+    rowCount: number;
+    fields: string[];
+    elapsed: number;
+  }>>('/dba/query', { sql });
   return response.data.data;
 };

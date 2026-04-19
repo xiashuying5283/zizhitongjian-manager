@@ -10,15 +10,21 @@ import {
   Modal,
   message,
   Spin,
+  Card,
+  Tooltip,
+  Alert,
+  Collapse,
 } from 'antd';
-import { DeleteOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
+import { DeleteOutlined, PlusOutlined, RobotOutlined, SearchOutlined, GlobalOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { CharacterDetail, Relation } from '../types';
 import {
   getCharacterDetail,
   enrichCharacter,
   confirmEnrich,
   deleteCharacter,
+  getBaiduBaike,
 } from '../api';
+import type { BaikeResult } from '../api';
 import './EditPanel.css';
 
 const { TextArea } = Input;
@@ -27,7 +33,7 @@ interface EditPanelProps {
   visible: boolean;
   characterId: number | null;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (keepSelection?: boolean) => void;
 }
 
 const eraOptions = [
@@ -77,6 +83,10 @@ const EditPanel: React.FC<EditPanelProps> = ({
   const [relations, setRelations] = useState<Relation[]>([]);
   const [hintModalVisible, setHintModalVisible] = useState(false);
   const [userHint, setUserHint] = useState('');
+  const [baiduQuery, setBaiduQuery] = useState('');
+  const [baiduLoading, setBaiduLoading] = useState(false);
+  const [baiduResult, setBaiduResult] = useState<BaikeResult | null>(null);
+  const [baiduError, setBaiduError] = useState('');
 
   useEffect(() => {
     if (visible && characterId) {
@@ -97,6 +107,8 @@ const EditPanel: React.FC<EditPanelProps> = ({
         hometown: data.hometown,
         aliases: (data.aliases || []).join('、'),
         summary: data.summary,
+        birth_year: data.birth_year,
+        death_year: data.death_year,
       });
       const allRelations: Relation[] = [
         ...(data.relations || []).map((r) => ({
@@ -114,6 +126,7 @@ const EditPanel: React.FC<EditPanelProps> = ({
         })),
       ];
       setRelations(allRelations);
+      setBaiduQuery(data.name);
     } catch (error) {
       message.error('加载人物详情失败');
     } finally {
@@ -137,14 +150,20 @@ const EditPanel: React.FC<EditPanelProps> = ({
         hometown: result.proposed.hometown,
         aliases: (result.proposed.aliases || []).join('、'),
         summary: result.proposed.summary,
+        birth_year: result.proposed.birth_year,
+        death_year: result.proposed.death_year,
       });
 
       if (result.relationships && result.relationships.length > 0) {
-        const newRelations: Relation[] = result.relationships.map((r) => ({
-          name: r.name,
-          relation: r.relation,
-          description: r.description || '',
-        }));
+        // 对 AI 生成的关系按 name 去重（已有同名人物则不追加）
+        const existingNames = new Set(relations.map(r => r.name));
+        const newRelations: Relation[] = result.relationships
+          .filter((r) => !existingNames.has(r.name))
+          .map((r) => ({
+            name: r.name,
+            relation: r.relation,
+            description: r.description || '',
+          }));
         setRelations([...relations, ...newRelations]);
       }
 
@@ -201,15 +220,18 @@ const EditPanel: React.FC<EditPanelProps> = ({
           ? values.aliases.split('、').map((a: string) => a.trim()).filter(Boolean)
           : [],
         summary: values.summary,
+        birth_year: values.birth_year,
+        death_year: values.death_year,
         relationships: validRelations.map((r) => ({
           name: r.name,
           relation: r.relation,
           description: r.description,
         })),
+        createMissing: true,  // 自动创建不存在的人物
       });
 
       message.success('保存成功');
-      onSuccess();
+      onSuccess(true);  // 保持选中状态
       onClose();
     } catch (error: any) {
       const errorMsg = error.response?.data?.error || '保存失败';
@@ -314,6 +336,119 @@ const EditPanel: React.FC<EditPanelProps> = ({
               AI 智能生成
             </Button>
 
+            <Card 
+              size="small" 
+              title={
+                <span>
+                  <GlobalOutlined style={{ marginRight: 8, color: '#1e3a5f' }} />
+                  百度百科查询
+                </span>
+              }
+              className="baidu-card"
+              extra={
+                <Space size={4}>
+                  {baiduResult && (
+                    <Tooltip title="在新标签页打开">
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={<LinkOutlined />}
+                        onClick={() => window.open(baiduResult.url, '_blank')}
+                      />
+                    </Tooltip>
+                  )}
+                </Space>
+              }
+            >
+              <div className="baidu-search-row">
+                <Input.Search
+                  placeholder="输入人物名查询百度百科..."
+                  value={baiduQuery}
+                  onChange={(e) => setBaiduQuery(e.target.value)}
+                  onSearch={async (value) => {
+                    if (!value?.trim()) return;
+                    setBaiduLoading(true);
+                    setBaiduError('');
+                    setBaiduResult(null);
+                    try {
+                      const data = await getBaiduBaike(value.trim());
+                      setBaiduResult(data);
+                    } catch (err: any) {
+                      setBaiduError(err.response?.data?.error || '查询失败');
+                    } finally {
+                      setBaiduLoading(false);
+                    }
+                  }}
+                  enterButton={
+                    <Button type="primary" size="small" icon={<SearchOutlined />} loading={baiduLoading}>
+                      查询
+                    </Button>
+                  }
+                />
+                {baiduResult && (
+                  <Tooltip title="重新查询">
+                    <Button
+                      size="small"
+                      icon={<ReloadOutlined />}
+                      onClick={async () => {
+                        if (!baiduQuery.trim()) return;
+                        setBaiduLoading(true);
+                        setBaiduError('');
+                        try {
+                          const data = await getBaiduBaike(baiduQuery.trim());
+                          setBaiduResult(data);
+                        } catch (err: any) {
+                          setBaiduError(err.response?.data?.error || '查询失败');
+                        } finally {
+                          setBaiduLoading(false);
+                        }
+                      }}
+                    />
+                  </Tooltip>
+                )}
+              </div>
+
+              {baiduLoading && (
+                <div className="baidu-loading">
+                  <Spin size="small" /> <span style={{ marginLeft: 8, color: '#8c8c8c' }}>正在查询百度百科...</span>
+                </div>
+              )}
+
+              {baiduError && (
+                <Alert type="error" message={baiduError} style={{ marginTop: 12 }} showIcon closable onClose={() => setBaiduError('')} />
+              )}
+
+              {baiduResult && !baiduLoading && (
+                <div className="baidu-content">
+                  {!baiduResult.found && (
+                    <Alert type="warning" message="未找到精确词条" description="可能需要更精确的名称，试试在新标签页中搜索" style={{ marginBottom: 12 }} showIcon />
+                  )}
+                  {baiduResult.summary && (
+                    <div className="baidu-summary">
+                      <div className="baidu-summary-label">摘要</div>
+                      <div className="baidu-summary-text">{baiduResult.summary}</div>
+                    </div>
+                  )}
+                  {baiduResult.sections.length > 0 && (
+                    <Collapse
+                      size="small"
+                      className="baidu-sections"
+                      defaultActiveKey={baiduResult.sections.slice(0, 2).map((_, i) => String(i))}
+                    >
+                      {baiduResult.sections.map((section, idx) => (
+                        <Collapse.Panel header={section.title} key={String(idx)}>
+                          <div className="baidu-section-text">{section.content}</div>
+                        </Collapse.Panel>
+                      ))}
+                    </Collapse>
+                  )}
+                  {!baiduResult.summary && baiduResult.sections.length === 0 && (
+                    <div className="baidu-empty">未能提取到正文内容</div>
+                  )}
+                </div>
+              )}
+            </Card>
+
             <Form form={form} layout="vertical">
               <Form.Item name="name" label="姓名" rules={[{ required: true }]}>
                 <Input placeholder="请输入姓名" />
@@ -321,6 +456,22 @@ const EditPanel: React.FC<EditPanelProps> = ({
 
               <Form.Item name="era" label="纪年">
                 <Select options={eraOptions} />
+              </Form.Item>
+
+              <Form.Item label="生卒年">
+                <Input.Group compact>
+                  <Form.Item name="birth_year" noStyle>
+                    <Input style={{ width: '45%' }} placeholder="出生年份" />
+                  </Form.Item>
+                  <Input
+                    style={{ width: '10%', borderLeft: 0, pointerEvents: 'none', backgroundColor: '#fff' }}
+                    placeholder="~"
+                    disabled
+                  />
+                  <Form.Item name="death_year" noStyle>
+                    <Input style={{ width: '45%', borderLeft: 0 }} placeholder="死亡年份" />
+                  </Form.Item>
+                </Input.Group>
               </Form.Item>
 
               <Form.Item name="title" label="主要职位">

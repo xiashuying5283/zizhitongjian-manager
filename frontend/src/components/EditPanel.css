@@ -125,3 +125,101 @@
   border-top: 1px solid #e2e8f0;
   padding: 12px 24px;
 }
+
+/* 百度百科卡片样式 */
+.baidu-card {
+  margin-bottom: 20px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.baidu-card .ant-card-head {
+  background: linear-gradient(135deg, #f8fafc 0%, #e8f4f8 100%);
+  border-bottom: 1px solid #e2e8f0;
+  border-radius: 8px 8px 0 0;
+  min-height: 40px;
+  padding: 8px 12px;
+}
+
+.baidu-card .ant-card-head-title {
+  padding: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #334155;
+}
+
+.baidu-card .ant-card-body {
+  padding: 12px;
+}
+
+.baidu-search-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.baidu-search-row .ant-input-search {
+  flex: 1;
+}
+
+.baidu-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.baidu-content {
+  margin-top: 12px;
+}
+
+.baidu-summary {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #f0f9ff;
+  border-radius: 6px;
+  border-left: 3px solid #1e3a5f;
+}
+
+.baidu-summary-label {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.baidu-summary-text {
+  font-size: 13px;
+  line-height: 1.8;
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.baidu-sections .ant-collapse-header {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1e3a5f;
+  padding: 8px 12px !important;
+}
+
+.baidu-sections .ant-collapse-content-box {
+  padding: 8px 12px !important;
+}
+
+.baidu-section-text {
+  font-size: 13px;
+  line-height: 1.8;
+  color: #475569;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.baidu-empty {
+  text-align: center;
+  color: #94a3b8;
+  padding: 16px;
+  font-size: 13px;
+}

@@ -916,6 +916,8 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, r
   "aliases": ["别名1", "别名2"],
   "hometown": "籍贯，如：营州、陕州等",
   "era": "所属纪年，如：周纪、秦纪、汉纪、晋纪、隋纪、唐纪、后周纪等",
+  "birth_year": "出生年份，如：626年、贞观元年等，不确定则留空",
+  "death_year": "死亡年份，如：705年、神龙元年等，不确定则留空",
   "relationships": [
     {"name": "相关人物姓名", "relation": "关系类型", "description": "关系说明"}
   ]
@@ -931,17 +933,18 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, r
 
     let userContent = `人物：${character.name}\n当前纪年：${character.era || '未知'}\n当前title：${character.title || '无'}\n当前summary：${character.summary || '无'}\n当前aliases：${character.aliases ? JSON.stringify(character.aliases) : '无'}\n\n`;
 
+    // 用户补充信息用于纠偏，优先级最高
+    if (userHint) {
+      userContent = `【用户纠偏信息 - 请以此为准纠正其他来源的错误】\n${userHint}\n\n` + userContent;
+    }
+
     if (passages) {
       userContent += `【资治通鉴原文】\n${passages}\n\n`;
     } else {
       userContent += `【资治通鉴原文】\n（未找到相关记载）\n\n`;
     }
 
-    if (userHint) {
-      userContent += `【用户补充信息】\n${userHint}\n\n`;
-    }
-
-    userContent += `请综合利用以上信息和你的历史知识，为该人物撰写完整传记。`;
+    userContent += `请综合利用以上信息撰写传记。注意：用户纠偏信息优先级最高，如有冲突请以用户信息为准。`;
 
     // 4. 联网搜索（火山引擎 Responses API + web_search）
     const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
@@ -1019,6 +1022,8 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, r
       aliases: string[];
       hometown: string | null;
       era: string | null;
+      birth_year: string | null;
+      death_year: string | null;
       relationships: Array<{ name: string; relation: string; description: string }>;
     };
 
@@ -1073,6 +1078,8 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, r
           summary: extracted.summary,
           aliases: extracted.aliases,
           hometown: extracted.hometown,
+          birth_year: extracted.birth_year,
+          death_year: extracted.death_year,
         },
         relationships: relationshipsWithStatus,
         sources: {
@@ -1200,7 +1207,9 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
       title, 
       hometown, 
       aliases, 
-      summary, 
+      summary,
+      birth_year,
+      death_year,
       relationships,
       createMissing = false  // 是否自动创建不存在的人物
     } = req.body;
@@ -1243,6 +1252,14 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
       updateFields.push(`summary = $${paramIndex++}`);
       updateValues.push(summary);
     }
+    if (birth_year !== undefined) {
+      updateFields.push(`birth_year = $${paramIndex++}`);
+      updateValues.push(birth_year);
+    }
+    if (death_year !== undefined) {
+      updateFields.push(`death_year = $${paramIndex++}`);
+      updateValues.push(death_year);
+    }
 
     updateFields.push(`updated_at = NOW()`);
     updateValues.push(characterId);
@@ -1254,12 +1271,12 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
       );
     }
 
-    // 处理关系
-    const skippedCharacters: string[] = [];
+    // 处理人物关系
+    const addedRelations: Array<{ name: string; relation: string }> = [];
+    const deletedRelations: Array<{ name: string; relation: string }> = [];
     const createdCharacters: string[] = [];
-    const addedRelations: string[] = [];
-    
-    if (relationships && Array.isArray(relationships)) {
+
+    if (relationships !== undefined) {
       // 获取当前人物纪年用于创建新人物
       const charResult = await client.query(
         `SELECT era FROM characters WHERE id = $1`,
@@ -1267,25 +1284,31 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
       );
       const currentEra = charResult.rows[0]?.era || '待定';
 
+      // 获取现有关联人物 ID 列表
+      const existingRels = await client.query(
+        `SELECT cr.id, cr.related_character_id, cr.relation_type, c.name 
+         FROM character_relations cr 
+         JOIN characters c ON cr.related_character_id = c.id 
+         WHERE cr.character_id = $1`,
+        [characterId]
+      );
+
+      // 构建传入关系的 Map（用于快速查找），同时记录人物名
+      const incomingRels = new Map<string, { relatedId: number; relatedName: string; relation: string; description: string }>();
+      
       for (const rel of relationships) {
-        const { name: relatedName, relation, description, create = true } = rel;
-        
-        // 如果用户选择不创建此关系，跳过
-        if (!create) {
-          skippedCharacters.push(relatedName);
-          continue;
-        }
+        const { name: relatedName, relation, description } = rel;
         
         // 查找关联人物
-        let relatedResult: QueryResult = await client.query(
+        const relResult = await client.query(
           `SELECT id FROM characters WHERE name = $1 OR aliases::text ILIKE $2`,
           [relatedName, `%"${relatedName}"%`]
         );
-
+        
         let relatedId: number;
-
-        if (relatedResult.rows.length > 0) {
-          relatedId = relatedResult.rows[0].id;
+        
+        if (relResult.rows.length > 0) {
+          relatedId = relResult.rows[0].id;
         } else if (createMissing) {
           // 自动创建不存在的人物
           const pinyinInitial = getPinyinInitial(relatedName);
@@ -1298,26 +1321,37 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
           relatedId = createResult.rows[0].id;
           createdCharacters.push(relatedName);
         } else {
-          // 人物不存在且不自动创建，跳过
-          skippedCharacters.push(relatedName);
-          continue;
+          continue; // 人物不存在且不自动创建，跳过
         }
         
-        // 检查关系是否已存在
-        const existRel: QueryResult = await client.query(
-          `SELECT id FROM character_relations 
-           WHERE character_id = $1 AND related_character_id = $2 AND relation_type = $3`,
-          [characterId, relatedId, relation]
-        );
+        incomingRels.set(`${relatedId}:${relation}`, { relatedId, relatedName, relation, description: description || '' });
+      }
 
-        if (existRel.rows.length === 0) {
-          // 插入新关系
+      // 删除不在传入列表中的旧关系
+      for (const existing of existingRels.rows) {
+        const key = `${existing.related_character_id}:${existing.relation_type}`;
+        if (!incomingRels.has(key)) {
+          await client.query(
+            `DELETE FROM character_relations WHERE id = $1`,
+            [existing.id]
+          );
+          deletedRelations.push({ name: existing.name, relation: existing.relation_type });
+        }
+      }
+
+      // 添加新关系
+      for (const [key, rel] of incomingRels) {
+        const existing = existingRels.rows.find(
+          r => r.related_character_id === rel.relatedId && r.relation_type === rel.relation
+        );
+        
+        if (!existing) {
           await client.query(
             `INSERT INTO character_relations (character_id, related_character_id, relation_type, description) 
              VALUES ($1, $2, $3, $4)`,
-            [characterId, relatedId, relation, description || null]
+            [characterId, rel.relatedId, rel.relation, rel.description]
           );
-          addedRelations.push(`${relatedName}（${relation}）`);
+          addedRelations.push({ name: rel.relatedName, relation: rel.relation });
         }
       }
     }
@@ -1329,8 +1363,8 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
       name: name,
       updated: Object.keys(req.body).filter(k => !['characterId', 'relationships', 'createMissing'].includes(k)),
       addedRelations,
-      createdCharacters,
-      skippedCharacters
+      deletedRelations,
+      createdCharacters
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1410,6 +1444,263 @@ app.delete(`${API_PREFIX}/characters/:id`, async (req: Request, res: Response) =
     sendError(res, '删除失败', 500);
   } finally {
     client.release();
+  }
+});
+
+// ============ 百度百科代理接口 ============
+
+// 辅助函数：从 HTML 中提取纯文本，保留段落结构
+function extractTextFromHtml(html: string): { title: string; summary: string; sections: Array<{ title: string; content: string }> } {
+  const result = { title: '', summary: '', sections: [] as Array<{ title: string; content: string }> };
+
+  // 提取词条标题
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (titleMatch) {
+    result.title = titleMatch[1].replace(/_百度百科.*$/,'').replace(/&amp;/g,'&').trim();
+  }
+
+  // 辅助：移除标签获取文字
+  const stripTags = (s: string) => s
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#\d+;/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  // 提取摘要区域
+  const summaryPatterns = [
+    /<div[^>]*class="lemma-summary[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i,
+    /<div[^>]*class="lemma-summary[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+  ];
+  for (const pat of summaryPatterns) {
+    const m = html.match(pat);
+    if (m) {
+      result.summary = stripTags(m[1]);
+      break;
+    }
+  }
+
+  // 提取正文各章节
+  // 百度百科的章节标题通常是 <h2> 或 class 包含 title-text / para-title
+  // 正文段落通常是 class 包含 para
+  const sectionRegex = /<(?:h[2-3]|div)[^>]*class="[^"]*(?:para-title|title-text|catalog-title)[^"]*"[^>]*>([\s\S]*?)<\/(?:h[2-3]|div)>/gi;
+  const paraRegex = /<div[^>]*class="para[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+
+  // 先按章节分割
+  const sectionMatches = [...html.matchAll(sectionRegex)];
+  if (sectionMatches.length > 0) {
+    for (let i = 0; i < sectionMatches.length; i++) {
+      const sectionTitle = stripTags(sectionMatches[i][1]);
+      if (!sectionTitle || sectionTitle.length > 30) continue; // 跳过过长的异常标题
+
+      // 提取该章节到下一章节之间的段落
+      const startPos = sectionMatches[i].index! + sectionMatches[i][0].length;
+      const endPos = i + 1 < sectionMatches.length ? sectionMatches[i + 1].index! : html.length;
+      const sectionHtml = html.substring(startPos, endPos);
+
+      const paras: string[] = [];
+      const paraMatches = [...sectionHtml.matchAll(paraRegex)];
+      for (const pm of paraMatches) {
+        const text = stripTags(pm[1]);
+        if (text) paras.push(text);
+      }
+      if (paras.length > 0) {
+        result.sections.push({ title: sectionTitle, content: paras.join('\n\n') });
+      }
+    }
+  }
+
+  // 如果没提取到章节，尝试直接提取所有段落
+  if (result.sections.length === 0) {
+    const allParas: string[] = [];
+    const paraMatches = [...html.matchAll(paraRegex)];
+    for (const pm of paraMatches) {
+      const text = stripTags(pm[1]);
+      if (text) allParas.push(text);
+    }
+    if (allParas.length > 0) {
+      result.sections.push({ title: '正文', content: allParas.join('\n\n') });
+    }
+  }
+
+  // 提取基本信息表格 (basic-info)
+  const infoPatterns = [
+    /<div[^>]*class="basic-info[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/i,
+    /<div[^>]*class="basic-info[\s\S]*?<\/div>\s*<\/div>/i,
+  ];
+  for (const pat of infoPatterns) {
+    const m = html.match(pat);
+    if (m) {
+      const infoText = stripTags(m[0]).replace(/\n{2,}/g, '\n').trim();
+      if (infoText && infoText.length < 500) {
+        // 作为摘要补充
+        if (result.summary) {
+          result.summary = infoText + '\n\n' + result.summary;
+        } else {
+          result.summary = infoText;
+        }
+      }
+      break;
+    }
+  }
+
+  return result;
+}
+
+app.get(`${API_PREFIX}/baidu-baike`, async (req: Request, res: Response) => {
+  try {
+    const query = req.query.q as string;
+    if (!query) {
+      return sendError(res, '请提供查询关键词');
+    }
+
+    // 先尝试直接访问百度百科词条
+    const baikeUrl = `https://baike.baidu.com/item/${encodeURIComponent(query)}`;
+    
+    const response = await fetch(baikeUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      },
+      redirect: 'follow',
+    });
+
+    if (!response.ok) {
+      return sendError(res, `百度百科请求失败: ${response.status}`, 502);
+    }
+
+    const html = await response.text();
+
+    // 检查是否被重定向到了搜索页（词条不存在）
+    if (html.includes('百度百科——全球最大中文百科全书') && !html.includes('lemma-summary') && !html.includes('para-title')) {
+      return sendSuccess(res, {
+        found: false,
+        title: query,
+        summary: '未找到该词条，可能需要更精确的名称。请尝试在新标签页中搜索。',
+        sections: [],
+        url: `https://baike.baidu.com/item/${encodeURIComponent(query)}`,
+      });
+    }
+
+    const extracted = extractTextFromHtml(html);
+
+    sendSuccess(res, {
+      found: true,
+      title: extracted.title || query,
+      summary: extracted.summary,
+      sections: extracted.sections,
+      url: baikeUrl,
+    });
+  } catch (error: any) {
+    console.error('Error proxying baidu baike:', error);
+    sendError(res, `获取百度百科失败: ${error.message}`, 500);
+  }
+});
+
+// ============ DBA 数据库管理接口 ============
+
+// 获取所有表
+app.get(`${API_PREFIX}/dba/tables`, async (req: Request, res: Response) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        table_name,
+        (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = t.table_name) as column_count
+      FROM information_schema.tables t
+      WHERE table_schema = 'public' 
+      AND table_type = 'BASE TABLE'
+      ORDER BY table_name
+    `);
+    sendSuccess(res, result.rows);
+  } catch (error) {
+    console.error('Error fetching tables:', error);
+    sendError(res, '获取表列表失败', 500);
+  }
+});
+
+// 获取表结构
+app.get(`${API_PREFIX}/dba/tables/:name`, async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    
+    // 获取列信息
+    const columnsResult = await pool.query(`
+      SELECT 
+        column_name,
+        data_type,
+        character_maximum_length,
+        is_nullable,
+        column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = $1
+      ORDER BY ordinal_position
+    `, [name]);
+    
+    // 获取索引信息
+    const indexResult = await pool.query(`
+      SELECT 
+        indexname,
+        indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = $1
+    `, [name]);
+    
+    // 获取行数
+    const countResult = await pool.query(`SELECT COUNT(*) as count FROM "${name}"`);
+    
+    sendSuccess(res, {
+      columns: columnsResult.rows,
+      indexes: indexResult.rows,
+      rowCount: parseInt(countResult.rows[0].count)
+    });
+  } catch (error) {
+    console.error('Error fetching table info:', error);
+    sendError(res, '获取表结构失败', 500);
+  }
+});
+
+// 执行 SQL 查询（只读）
+app.post(`${API_PREFIX}/dba/query`, async (req: Request, res: Response) => {
+  try {
+    const { sql } = req.body;
+    
+    if (!sql || typeof sql !== 'string') {
+      return sendError(res, '请提供 SQL 语句');
+    }
+    
+    // 简单的安全检查：只允许 SELECT, EXPLAIN, SHOW
+    const sqlUpper = sql.trim().toUpperCase();
+    const allowedPrefixes = ['SELECT', 'EXPLAIN', 'SHOW'];
+    const isAllowed = allowedPrefixes.some(prefix => sqlUpper.startsWith(prefix));
+    
+    if (!isAllowed) {
+      return sendError(res, '只允许执行 SELECT, EXPLAIN, SHOW 查询');
+    }
+    
+    // 执行查询
+    const startTime = Date.now();
+    const result = await pool.query(sql);
+    const elapsed = Date.now() - startTime;
+    
+    sendSuccess(res, {
+      rows: result.rows,
+      rowCount: result.rowCount,
+      fields: result.fields?.map((f: any) => f.name) || [],
+      elapsed
+    });
+  } catch (error: any) {
+    console.error('SQL Error:', error);
+    sendError(res, `SQL 执行错误: ${error.message}`, 400);
   }
 });
 

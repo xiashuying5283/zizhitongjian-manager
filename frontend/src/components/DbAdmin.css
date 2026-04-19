@@ -1,0 +1,131 @@
+.db-admin {
+  display: flex;
+  height: calc(100vh - 120px);
+  position: relative;
+}
+
+.db-sidebar {
+  flex-shrink: 0;
+}
+
+.db-sidebar .ant-card {
+  height: 100%;
+}
+
+.db-sidebar .ant-card-body {
+  padding: 0;
+  height: calc(100% - 57px);
+  overflow-y: auto;
+}
+
+/* 可拖拽分割线 */
+.resize-handle {
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.resize-handle:hover,
+.resize-handle.dragging {
+  background: #1890ff;
+}
+
+.table-list {
+  padding: 8px 0;
+}
+
+.table-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  border-left: 3px solid transparent;
+}
+
+.table-item:hover {
+  background-color: #f5f5f5;
+}
+
+.table-item.active {
+  background-color: #e6f4ff;
+  border-left-color: #1890ff;
+}
+
+.table-item .ant-tag {
+  font-size: 11px;
+  margin: 0;
+}
+
+.db-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.db-main .ant-tabs {
+  height: 100%;
+}
+
+.db-main .ant-tabs-content {
+  height: calc(100% - 46px);
+}
+
+.db-main .ant-tabs-tabpane {
+  height: 100%;
+  overflow-y: auto;
+}
+
+.query-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sql-editor {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  border-bottom: 6px solid #d9d9d9;
+  cursor: default;
+  transition: border-color 0.2s;
+}
+
+.sql-editor.dragging {
+  border-bottom-color: #1890ff;
+  user-select: none;
+}
+
+.sql-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-shrink: 0;
+}
+
+.query-tab-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.query-tab-close {
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.ant-tabs-tab:hover .query-tab-close {
+  opacity: 1;
+}
+
+.query-tab-close:hover {
+  color: #ff4d4f;
+}
+
+.structure-panel {
+  display: flex;
+  flex-direction: column;
+}

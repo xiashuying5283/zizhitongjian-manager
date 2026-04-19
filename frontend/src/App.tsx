@@ -9,6 +9,7 @@ import Dashboard from './components/Dashboard';
 import CharacterManagement from './components/CharacterManagement';
 import PositionsManagement from './components/PositionsManagement';
 import GeographyManagement from './components/GeographyManagement';
+import DbAdmin from './components/DbAdmin';
 import './App.css';
 
 const App: React.FC = () => {
@@ -64,6 +65,7 @@ const App: React.FC = () => {
             <Route path="characters/*" element={<CharacterManagement />} />
             <Route path="positions" element={<PositionsManagement />} />
             <Route path="geography" element={<GeographyManagement />} />
+            <Route path="dba" element={<DbAdmin />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

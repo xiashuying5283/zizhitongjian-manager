@@ -92,6 +92,8 @@ export interface EnrichResponse {
     summary?: string;
     aliases?: string[];
     hometown?: string;
+    birth_year?: string;
+    death_year?: string;
   };
   relationships: {
     name: string;
@@ -109,11 +111,14 @@ export interface EnrichConfirmRequest {
   hometown?: string;
   aliases?: string[];
   summary?: string;
+  birth_year?: string;
+  death_year?: string;
   relationships?: {
     name: string;
     relation: string;
     description?: string;
   }[];
+  createMissing?: boolean;  // 是否自动创建不存在的人物
 }
 
 // ==================== 地理类型 ====================

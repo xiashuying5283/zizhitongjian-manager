@@ -1,6 +1,6 @@
 import React from 'react';
 import { Menu } from 'antd';
-import { UserOutlined, TeamOutlined, EnvironmentOutlined, HomeOutlined } from '@ant-design/icons';
+import { UserOutlined, TeamOutlined, EnvironmentOutlined, HomeOutlined, DatabaseOutlined } from '@ant-design/icons';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -29,6 +29,11 @@ const Sidebar: React.FC<SidebarProps> = ({ currentModule, onModuleChange }) => {
       key: 'geography',
       icon: <EnvironmentOutlined />,
       label: '地理管理',
+    },
+    {
+      key: 'dba',
+      icon: <DatabaseOutlined />,
+      label: '数据库管理',
     },
   ];
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Collapse, Empty, Spin, Tag, Input, Select } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import type { PinyinGroup } from '../types';
@@ -72,6 +72,30 @@ const CharacterList: React.FC<CharacterListProps> = ({
   onEraChange,
 }) => {
   const [activeKeys, setActiveKeys] = useState<string[]>([]);
+  const selectedItemRef = useRef<HTMLDivElement>(null);
+  const listContentRef = useRef<HTMLDivElement>(null);
+
+  // 滚动到选中项
+  useEffect(() => {
+    if (selectedItemRef.current && listContentRef.current && !loading) {
+      const item = selectedItemRef.current;
+      const container = listContentRef.current;
+      const itemRect = item.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      
+      // 计算相对于容器的位置
+      const itemTop = itemRect.top - containerRect.top;
+      const itemHeight = itemRect.height;
+      const containerHeight = containerRect.height;
+      
+      // 让选中项居中
+      const targetScroll = container.scrollTop + itemTop - (containerHeight - itemHeight) / 2;
+      container.scrollTo({
+        top: Math.max(0, targetScroll),
+        behavior: 'smooth',
+      });
+    }
+  }, [selectedId, loading, groups]);
 
   const handlePanelChange = (keys: string | string[]) => {
     setActiveKeys(Array.isArray(keys) ? keys : [keys]);
@@ -109,7 +133,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
         />
       </div>
 
-      <div className="list-content">
+      <div className="list-content" ref={listContentRef}>
         {loading ? (
           <div className="loading-container">
             <Spin size="large" tip="加载中..." />
@@ -135,6 +159,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
                 {group.characters.map((char) => (
                   <div
                     key={char.id}
+                    ref={selectedId === char.id ? selectedItemRef : null}
                     className={`character-item ${selectedId === char.id ? 'active' : ''}`}
                     onClick={() => onSelect(char.id)}
                   >
