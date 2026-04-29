@@ -148,6 +148,46 @@ export interface GeographyListResponse {
   totalPages: number;
 }
 
+// ==================== 资治通鉴段落类型 ====================
+
+export interface Paragraph {
+  id: number;
+  content: string;
+  content_traditional?: string;
+  volume_name?: string;
+  volume_number?: number;
+  year_mark?: string;
+  emperor?: string;
+  bc_year?: number;
+  event_index?: number;
+  paragraph_index?: number;
+  with_notes?: string;
+  with_notes_traditional?: string;
+  translation?: string;
+  translation_traditional?: string;
+  is_chenguangyue?: boolean;
+  created_at?: string;
+}
+
+export interface ParagraphListResponse {
+  paragraphs: Paragraph[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface ParagraphGroup {
+  volume: string;
+  count: number;
+  paragraphs: Paragraph[];
+}
+
+export interface ParagraphGroupedResponse {
+  groups: ParagraphGroup[];
+  total: number;
+}
+
 // ==================== 官职类型 ====================
 
 export interface Position {

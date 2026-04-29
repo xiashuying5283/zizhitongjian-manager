@@ -8,6 +8,9 @@ import type {
   EnrichConfirmRequest,
   Geography,
   GeographyListResponse,
+  Paragraph,
+  ParagraphListResponse,
+  ParagraphGroupedResponse,
   Position,
   PositionListResponse,
 } from '../types';
@@ -20,6 +23,8 @@ const api = axios.create({
   },
   withCredentials: true,
 });
+
+const toNumber = (value: unknown): number => Number(value ?? 0);
 
 // 登录
 export const login = async (username: string, password: string) => {
@@ -137,7 +142,88 @@ export const getStats = async () => {
     characters: number;
     positions: number;
     geography: number;
+    paragraphs: number;
   }>>('/stats');
+  return response.data.data;
+};
+
+// ==================== 资治通鉴段落 API ====================
+
+// 获取卷名列表
+export const getParagraphVolumes = async (): Promise<string[]> => {
+  const response = await api.get<ApiResponse<string[]>>('/paragraphs/volumes');
+  return response.data.data;
+};
+
+// 获取段落列表
+export const getParagraphList = async (
+  page = 1,
+  limit = 20,
+  filters?: { keyword?: string; volume_name?: string; year_mark?: string; grouped?: boolean }
+): Promise<ParagraphListResponse | ParagraphGroupedResponse> => {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+  if (filters?.keyword) params.append('keyword', filters.keyword);
+  if (filters?.volume_name) params.append('volume_name', filters.volume_name);
+  if (filters?.year_mark) params.append('year_mark', filters.year_mark);
+  if (filters?.grouped) params.append('grouped', 'true');
+  const response = await api.get<ApiResponse<ParagraphListResponse | ParagraphGroupedResponse>>(`/paragraphs?${params}`);
+  return response.data.data;
+};
+
+// 获取段落详情
+export const getParagraphDetail = async (id: number): Promise<Paragraph> => {
+  const response = await api.get<ApiResponse<Paragraph>>(`/paragraphs/${id}`);
+  return response.data.data;
+};
+
+// 新增段落
+export const createParagraph = async (data: {
+  content: string;
+  content_traditional?: string;
+  volume_name?: string;
+  volume_number?: number;
+  year_mark?: string;
+  emperor?: string;
+  bc_year?: number;
+  event_index?: number;
+  paragraph_index?: number;
+  with_notes?: string;
+  with_notes_traditional?: string;
+  translation?: string;
+  translation_traditional?: string;
+  is_chenguangyue?: boolean;
+}) => {
+  const response = await api.post<ApiResponse<Paragraph>>('/paragraphs', data);
+  return response.data.data;
+};
+
+// 更新段落
+export const updateParagraph = async (id: number, data: Partial<{
+  content: string;
+  content_traditional: string;
+  volume_name: string;
+  volume_number: number;
+  year_mark: string;
+  emperor: string;
+  bc_year: number;
+  event_index: number;
+  paragraph_index: number;
+  with_notes: string;
+  with_notes_traditional: string;
+  translation: string;
+  translation_traditional: string;
+  is_chenguangyue: boolean;
+}>) => {
+  const response = await api.put<ApiResponse<Paragraph>>(`/paragraphs/${id}`, data);
+  return response.data.data;
+};
+
+// 删除段落
+export const deleteParagraph = async (id: number) => {
+  const response = await api.delete<ApiResponse<{ id: number }>>(`/paragraphs/${id}`);
   return response.data.data;
 };
 
@@ -329,5 +415,174 @@ export const executeQuery = async (sql: string, confirm = false) => {
     fields: string[];
     elapsed: number;
   }>>(url, { sql });
+  return response.data.data;
+};
+
+// 获取数据库监控信息
+export const getDbMonitorInfo = async () => {
+  type DbMonitorInfo = {
+    pool: {
+      total: number;
+      idle: number;
+      waiting: number;
+    };
+    database: {
+      name: string;
+      size: string;
+      size_bytes: number;
+    };
+    connections: {
+      total_connections: number;
+      active_connections: number;
+      idle_connections: number;
+    };
+    tables: Array<{
+      schemaname: string;
+      table_name: string;
+      live_rows: number;
+      dead_rows: number;
+      last_vacuum: string | null;
+      last_autovacuum: string | null;
+      last_analyze: string | null;
+      total_size: string;
+    }>;
+    indexes: Array<{
+      schemaname: string;
+      table_name: string;
+      index_name: string;
+      index_scans: number;
+      tuples_read: number;
+      tuples_fetched: number;
+    }>;
+    dbStat: {
+      numbackends: number;
+      xact_commit: number;
+      xact_rollback: number;
+      blks_read: number;
+      blks_hit: number;
+      cache_hit_ratio: number;
+      tup_returned: number;
+      tup_fetched: number;
+      tup_inserted: number;
+      tup_updated: number;
+      tup_deleted: number;
+      conflicts: number;
+      deadlocks: number;
+    } | null;
+    tableIo: Array<{
+      schemaname: string;
+      table_name: string;
+      heap_blks_read: number;
+      heap_blks_hit: number;
+      heap_hit_ratio: number;
+      idx_blks_read: number;
+      idx_blks_hit: number;
+      idx_hit_ratio: number;
+      toast_blks_read: number;
+      toast_blks_hit: number;
+      tidx_blks_read: number;
+      tidx_blks_hit: number;
+    }>;
+    bgwriter: {
+      checkpoints_timed: number;
+      checkpoints_req: number;
+      req_checkpoint_ratio: number;
+      buffers_clean: number;
+      buffers_backend: number;
+      buffers_alloc: number;
+      buffers_checkpoint: number;
+    } | null;
+    timestamp: string;
+  };
+
+  const response = await api.get<ApiResponse<DbMonitorInfo>>('/dba/monitor');
+  const data = response.data.data;
+
+  return {
+    ...data,
+    database: {
+      ...data.database,
+      size_bytes: toNumber(data.database.size_bytes),
+    },
+    connections: {
+      total_connections: toNumber(data.connections.total_connections),
+      active_connections: toNumber(data.connections.active_connections),
+      idle_connections: toNumber(data.connections.idle_connections),
+    },
+    tables: data.tables.map((table) => ({
+      ...table,
+      live_rows: toNumber(table.live_rows),
+      dead_rows: toNumber(table.dead_rows),
+    })),
+    indexes: data.indexes.map((index) => ({
+      ...index,
+      index_scans: toNumber(index.index_scans),
+      tuples_read: toNumber(index.tuples_read),
+      tuples_fetched: toNumber(index.tuples_fetched),
+    })),
+    dbStat: data.dbStat
+      ? {
+          numbackends: toNumber(data.dbStat.numbackends),
+          xact_commit: toNumber(data.dbStat.xact_commit),
+          xact_rollback: toNumber(data.dbStat.xact_rollback),
+          blks_read: toNumber(data.dbStat.blks_read),
+          blks_hit: toNumber(data.dbStat.blks_hit),
+          cache_hit_ratio: toNumber(data.dbStat.cache_hit_ratio),
+          tup_returned: toNumber(data.dbStat.tup_returned),
+          tup_fetched: toNumber(data.dbStat.tup_fetched),
+          tup_inserted: toNumber(data.dbStat.tup_inserted),
+          tup_updated: toNumber(data.dbStat.tup_updated),
+          tup_deleted: toNumber(data.dbStat.tup_deleted),
+          conflicts: toNumber(data.dbStat.conflicts),
+          deadlocks: toNumber(data.dbStat.deadlocks),
+        }
+      : null,
+    tableIo: data.tableIo.map((io) => ({
+      ...io,
+      heap_blks_read: toNumber(io.heap_blks_read),
+      heap_blks_hit: toNumber(io.heap_blks_hit),
+      heap_hit_ratio: toNumber(io.heap_hit_ratio),
+      idx_blks_read: toNumber(io.idx_blks_read),
+      idx_blks_hit: toNumber(io.idx_blks_hit),
+      idx_hit_ratio: toNumber(io.idx_hit_ratio),
+      toast_blks_read: toNumber(io.toast_blks_read),
+      toast_blks_hit: toNumber(io.toast_blks_hit),
+      tidx_blks_read: toNumber(io.tidx_blks_read),
+      tidx_blks_hit: toNumber(io.tidx_blks_hit),
+    })),
+    bgwriter: data.bgwriter
+      ? {
+          checkpoints_timed: toNumber(data.bgwriter.checkpoints_timed),
+          checkpoints_req: toNumber(data.bgwriter.checkpoints_req),
+          req_checkpoint_ratio: toNumber(data.bgwriter.req_checkpoint_ratio),
+          buffers_clean: toNumber(data.bgwriter.buffers_clean),
+          buffers_backend: toNumber(data.bgwriter.buffers_backend),
+          buffers_alloc: toNumber(data.bgwriter.buffers_alloc),
+          buffers_checkpoint: toNumber(data.bgwriter.buffers_checkpoint),
+        }
+      : null,
+  };
+};
+
+// 获取数据库版本和配置
+export const getDbInfo = async () => {
+  const response = await api.get<ApiResponse<{
+    version: string;
+    config: Array<{
+      name: string;
+      setting: string;
+      unit: string | null;
+      short_desc: string;
+    }>;
+  }>>('/dba/info');
+  return response.data.data;
+};
+
+// VACUUM/ANALYZE 表
+export const vacuumTable = async (tableName: string, mode: 'vacuum' | 'analyze' | 'vacuum_full') => {
+  const response = await api.post<ApiResponse<{ message: string; tableName: string; mode: string }>>(
+    '/dba/vacuum',
+    { tableName, mode }
+  );
   return response.data.data;
 };

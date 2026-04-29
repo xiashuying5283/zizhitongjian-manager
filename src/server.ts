@@ -32,8 +32,27 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://postgres:ncG6Y6Gyb776OPdd7F@cp-loyal-storm-19a3b2eb.pg5.aidap-global.cn-beijing.volces.com:5432/postgres?sslmode=require&channel_binding=require',
   ssl: {
     rejectUnauthorized: false
-  }
+  },
+  max: 5,
+  idleTimeoutMillis: 60000,       // 空闲 60 秒再释放，避免被远端断开
+  connectionTimeoutMillis: 10000,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 5000,
 });
+
+// 监听连接池错误，防止单个连接异常导致进程崩溃
+pool.on('error', (err) => {
+  console.error('[数据库连接池错误]', err.message);
+});
+
+// 定期健康检查，探测并淘汰死连接
+setInterval(async () => {
+  try {
+    await pool.query('SELECT 1');
+  } catch (e) {
+    console.error('[数据库健康检查失败]', (e as Error).message);
+  }
+}, 30000);
 
 // 中间件
 app.use(cors({
@@ -319,11 +338,19 @@ app.get(`${API_PREFIX}/stats`, async (req: Request, res: Response) => {
     const charactersResult = await pool.query('SELECT COUNT(*) as count FROM characters');
     const positionsResult = await pool.query('SELECT COUNT(*) as count FROM official_posts');
     const geographyResult = await pool.query('SELECT COUNT(*) as count FROM geography');
+    let paragraphsCount = 0;
+    try {
+      const paragraphsResult = await pool.query('SELECT COUNT(*) as count FROM zizhitongjian_paragraphs');
+      paragraphsCount = parseInt(paragraphsResult.rows[0].count) || 0;
+    } catch (e) {
+      // 表可能不存在
+    }
 
     sendSuccess(res, {
       characters: parseInt(charactersResult.rows[0].count) || 0,
       positions: parseInt(positionsResult.rows[0].count) || 0,
       geography: parseInt(geographyResult.rows[0].count) || 0,
+      paragraphs: paragraphsCount,
     });
   } catch (error) {
     console.error('Error fetching stats:', error);
@@ -544,6 +571,243 @@ app.delete(`${API_PREFIX}/geography/:id`, async (req: Request, res: Response) =>
   } catch (error) {
     console.error('Error deleting geography:', error);
     sendError(res, '删除地理失败', 500);
+  }
+});
+
+// ==================== 资治通鉴段落 API ====================
+
+// 获取卷名列表（用于筛选下拉框）
+app.get(`${API_PREFIX}/paragraphs/volumes`, async (req: Request, res: Response) => {
+  try {
+    const result: QueryResult = await pool.query(
+      'SELECT DISTINCT volume_name FROM zizhitongjian_paragraphs WHERE volume_name IS NOT NULL ORDER BY volume_name'
+    );
+    sendSuccess(res, result.rows.map((r: any) => r.volume_name));
+  } catch (error) {
+    console.error('Error fetching volumes:', error);
+    sendError(res, '获取卷名列表失败', 500);
+  }
+});
+
+// 获取段落列表（分页）
+app.get(`${API_PREFIX}/paragraphs`, async (req: Request, res: Response) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+    const keyword = req.query.keyword as string;
+    const volumeName = req.query.volume_name as string;
+    const yearMark = req.query.year_mark as string;
+    const grouped = req.query.grouped === 'true';
+
+    const offset = (page - 1) * limit;
+
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (keyword) {
+      whereClause += ` AND (content ILIKE $${paramIndex} OR content_traditional ILIKE $${paramIndex} OR with_notes ILIKE $${paramIndex} OR translation ILIKE $${paramIndex})`;
+      params.push(`%${keyword}%`);
+      paramIndex++;
+    }
+    if (volumeName) {
+      whereClause += ` AND volume_name = $${paramIndex++}`;
+      params.push(volumeName);
+    }
+    if (yearMark) {
+      whereClause += ` AND year_mark ILIKE $${paramIndex++}`;
+      params.push(`%${yearMark}%`);
+    }
+
+    // 分组模式：按卷名分组返回
+    if (grouped) {
+      const dataResult: QueryResult = await pool.query(
+        `SELECT id, content, content_traditional, volume_name, year_mark, emperor,
+                with_notes, with_notes_traditional, translation, translation_traditional,
+                volume_number, bc_year, event_index, paragraph_index, is_chenguangyue
+         FROM zizhitongjian_paragraphs ${whereClause} ORDER BY volume_name, id`,
+        params
+      );
+
+      // 按 volume_name 分组
+      const groups: { [key: string]: any[] } = {};
+      for (const row of dataResult.rows) {
+        const key = row.volume_name || '未分类';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(row);
+      }
+
+      const groupList = Object.entries(groups).map(([volume, paragraphs]) => ({
+        volume,
+        count: paragraphs.length,
+        paragraphs,
+      }));
+
+      sendSuccess(res, { groups: groupList, total: dataResult.rows.length });
+      return;
+    }
+
+    const countResult: QueryResult = await pool.query(
+      `SELECT COUNT(*) as total FROM zizhitongjian_paragraphs ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].total);
+    const totalPages = Math.ceil(total / limit);
+
+    const dataResult: QueryResult = await pool.query(
+      `SELECT * FROM zizhitongjian_paragraphs ${whereClause} ORDER BY id LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    );
+
+    sendSuccess(res, {
+      paragraphs: dataResult.rows,
+      total,
+      page,
+      limit,
+      totalPages
+    });
+  } catch (error) {
+    console.error('Error fetching paragraphs:', error);
+    sendError(res, '获取段落列表失败', 500);
+  }
+});
+
+// 获取段落详情
+app.get(`${API_PREFIX}/paragraphs/:id`, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const result: QueryResult = await pool.query(
+      'SELECT * FROM zizhitongjian_paragraphs WHERE id = $1',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return sendError(res, '段落不存在', 404);
+    }
+
+    sendSuccess(res, result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching paragraph:', error);
+    sendError(res, '获取段落详情失败', 500);
+  }
+});
+
+// 新增段落
+app.post(`${API_PREFIX}/paragraphs`, async (req: Request, res: Response) => {
+  try {
+    const {
+      content, content_traditional, volume_name, volume_number,
+      year_mark, emperor, bc_year, event_index, paragraph_index,
+      with_notes, with_notes_traditional, translation, translation_traditional,
+      is_chenguangyue
+    } = req.body;
+
+    if (!content) {
+      return sendError(res, '内容不能为空');
+    }
+
+    const result: QueryResult = await pool.query(
+      `INSERT INTO zizhitongjian_paragraphs
+        (content, content_traditional, volume_name, volume_number,
+         year_mark, emperor, bc_year, event_index, paragraph_index,
+         with_notes, with_notes_traditional, translation, translation_traditional,
+         is_chenguangyue)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       RETURNING *`,
+      [
+        content,
+        content_traditional || null,
+        volume_name || null,
+        volume_number || null,
+        year_mark || null,
+        emperor || null,
+        bc_year || null,
+        event_index || null,
+        paragraph_index || null,
+        with_notes || null,
+        with_notes_traditional || null,
+        translation || null,
+        translation_traditional || null,
+        is_chenguangyue || false,
+      ]
+    );
+
+    sendSuccess(res, result.rows[0]);
+  } catch (error) {
+    console.error('Error creating paragraph:', error);
+    sendError(res, '创建段落失败', 500);
+  }
+});
+
+// 更新段落
+app.put(`${API_PREFIX}/paragraphs/:id`, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const {
+      content, content_traditional, volume_name, volume_number,
+      year_mark, emperor, bc_year, event_index, paragraph_index,
+      with_notes, with_notes_traditional, translation, translation_traditional,
+      is_chenguangyue
+    } = req.body;
+
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
+    let paramIndex = 1;
+
+    const fieldMap: Record<string, any> = {
+      content, content_traditional, volume_name, volume_number,
+      year_mark, emperor, bc_year, event_index, paragraph_index,
+      with_notes, with_notes_traditional, translation, translation_traditional,
+      is_chenguangyue,
+    };
+
+    for (const [key, value] of Object.entries(fieldMap)) {
+      if (value !== undefined) {
+        updateFields.push(`${key} = $${paramIndex++}`);
+        updateValues.push(value);
+      }
+    }
+
+    if (updateFields.length === 0) {
+      return sendError(res, '没有要更新的字段', 400);
+    }
+
+    updateValues.push(id);
+
+    const result: QueryResult = await pool.query(
+      `UPDATE zizhitongjian_paragraphs SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+      updateValues
+    );
+
+    if (result.rows.length === 0) {
+      return sendError(res, '段落不存在', 404);
+    }
+
+    sendSuccess(res, result.rows[0]);
+  } catch (error) {
+    console.error('Error updating paragraph:', error);
+    sendError(res, '更新段落失败', 500);
+  }
+});
+
+// 删除段落
+app.delete(`${API_PREFIX}/paragraphs/:id`, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const result: QueryResult = await pool.query(
+      'DELETE FROM zizhitongjian_paragraphs WHERE id = $1 RETURNING id',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return sendError(res, '段落不存在', 404);
+    }
+
+    sendSuccess(res, result.rows[0]);
+  } catch (error) {
+    console.error('Error deleting paragraph:', error);
+    sendError(res, '删除段落失败', 500);
   }
 });
 
@@ -1468,10 +1732,10 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
         }
       }
 
-      // 添加新关系
+      // 添加或更新关系
       for (const [key, rel] of incomingRels) {
         const existing = existingRels.rows.find(
-          r => r.related_character_id === rel.relatedId && r.relation_type === rel.relation
+          r => r.related_character_id === rel.relatedId
         );
         
         if (!existing) {
@@ -1481,6 +1745,12 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Re
             [characterId, rel.relatedId, rel.relation, rel.description]
           );
           addedRelations.push({ name: rel.relatedName, relation: rel.relation });
+        } else {
+          // 已存在的关系，更新 relation_type 和 description
+          await client.query(
+            `UPDATE character_relations SET relation_type = $1, description = $2 WHERE id = $3`,
+            [rel.relation, rel.description, existing.id]
+          );
         }
       }
     }
@@ -1822,18 +2092,18 @@ app.get(`${API_PREFIX}/dba/tables/:name`, async (req: Request, res: Response) =>
 app.post(`${API_PREFIX}/dba/query`, async (req: Request, res: Response) => {
   try {
     const { sql } = req.body;
-    
+
     if (!sql || typeof sql !== 'string') {
       return sendError(res, '请提供 SQL 语句');
     }
-    
+
     // 安全检查：禁止危险操作
     const sqlUpper = sql.trim().toUpperCase();
     const forbidden = ['DROP ', 'TRUNCATE ', 'ALTER ', 'CREATE ', 'GRANT ', 'REVOKE '];
     if (forbidden.some(kw => sqlUpper.includes(kw))) {
       return sendError(res, '不允许执行 DDL 操作（DROP/TRUNCATE/ALTER/CREATE/GRANT/REVOKE）');
     }
-    
+
     const allowedPrefixes = ['SELECT', 'EXPLAIN', 'SHOW', 'INSERT', 'UPDATE', 'DELETE'];
     const isAllowed = allowedPrefixes.some(prefix => sqlUpper.startsWith(prefix));
     if (!isAllowed) {
@@ -1845,12 +2115,12 @@ app.post(`${API_PREFIX}/dba/query`, async (req: Request, res: Response) => {
     if (isWrite && !req.query.confirm) {
       return sendError(res, '写操作需加 ?confirm=1 参数确认');
     }
-    
+
     // 执行查询
     const startTime = Date.now();
     const result = await pool.query(sql);
     const elapsed = Date.now() - startTime;
-    
+
     sendSuccess(res, {
       rows: result.rows,
       rowCount: result.rowCount,
@@ -1860,6 +2130,240 @@ app.post(`${API_PREFIX}/dba/query`, async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('SQL Error:', error);
     sendError(res, `SQL 执行错误: ${error.message}`, 400);
+  }
+});
+
+// 获取数据库监控信息
+app.get(`${API_PREFIX}/dba/monitor`, async (req: Request, res: Response) => {
+  try {
+    // 获取连接池状态
+    const poolStats = {
+      total: pool.totalCount,
+      idle: pool.idleCount,
+      waiting: pool.waitingCount
+    };
+
+    // 获取数据库大小
+    const dbSizeResult = await pool.query(`
+      SELECT pg_size_pretty(pg_database_size(current_database())) as size,
+             pg_database_size(current_database()) as size_bytes
+    `);
+
+    // 获取表统计信息
+    const tableStatsResult = await pool.query(`
+      SELECT
+        schemaname,
+        relname as table_name,
+        n_live_tup as live_rows,
+        n_dead_tup as dead_rows,
+        last_vacuum,
+        last_autovacuum,
+        last_analyze,
+        pg_size_pretty(pg_total_relation_size(relid)) as total_size
+      FROM pg_stat_user_tables
+      ORDER BY pg_total_relation_size(relid) DESC
+      LIMIT 20
+    `);
+
+    // 获取连接数统计
+    const connectionStatsResult = await pool.query(`
+      SELECT count(*) as total_connections,
+             count(*) FILTER (WHERE state = 'active') as active_connections,
+             count(*) FILTER (WHERE state = 'idle') as idle_connections
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+    `);
+
+    // 获取索引使用情况
+    const indexStatsResult = await pool.query(`
+      SELECT
+        schemaname,
+        relname as table_name,
+        indexrelname as index_name,
+        idx_scan as index_scans,
+        idx_tup_read as tuples_read,
+        idx_tup_fetch as tuples_fetched
+      FROM pg_stat_user_indexes
+      ORDER BY idx_scan DESC
+      LIMIT 20
+    `);
+
+    // 获取数据库级统计（事务、缓冲区命中率等）
+    let dbStatResult: QueryResult | null = null;
+    try {
+      dbStatResult = await pool.query(`
+        SELECT
+          numbackends,
+          xact_commit,
+          xact_rollback,
+          blks_read,
+          blks_hit,
+          CASE WHEN blks_read + blks_hit > 0
+            THEN ROUND((blks_hit::numeric / (blks_read + blks_hit)) * 100, 2)
+            ELSE 100 END as cache_hit_ratio,
+          tup_returned,
+          tup_fetched,
+          tup_inserted,
+          tup_updated,
+          tup_deleted,
+          conflicts,
+          deadlocks
+        FROM pg_stat_database
+        WHERE datname = current_database()
+      `);
+    } catch (e) {
+      // 某些云数据库可能限制此查询
+    }
+
+    // 获取表级 I/O 统计（缓冲区命中/读取）
+    let tableIoResult: QueryResult | null = null;
+    try {
+      tableIoResult = await pool.query(`
+        SELECT
+          schemaname,
+          relname as table_name,
+          heap_blks_read,
+          heap_blks_hit,
+          CASE WHEN heap_blks_read + heap_blks_hit > 0
+            THEN ROUND((heap_blks_hit::numeric / (heap_blks_read + heap_blks_hit)) * 100, 2)
+            ELSE 100 END as heap_hit_ratio,
+          idx_blks_read,
+          idx_blks_hit,
+          CASE WHEN idx_blks_read + idx_blks_hit > 0
+            THEN ROUND((idx_blks_hit::numeric / (idx_blks_read + idx_blks_hit)) * 100, 2)
+            ELSE 100 END as idx_hit_ratio,
+          toast_blks_read,
+          toast_blks_hit,
+          tidx_blks_read,
+          tidx_blks_hit
+        FROM pg_statio_user_tables
+        WHERE (heap_blks_read + heap_blks_hit) > 0
+        ORDER BY heap_blks_read DESC
+        LIMIT 15
+      `);
+    } catch (e) {
+      // 某些云数据库可能限制此查询
+    }
+
+    // 获取后台写入器统计
+    let bgwriterResult: QueryResult | null = null;
+    try {
+      bgwriterResult = await pool.query(`
+        SELECT
+          checkpoints_timed,
+          checkpoints_req,
+          ROUND((checkpoints_req::numeric / NULLIF(checkpoints_timed + checkpoints_req, 0)) * 100, 2) as req_checkpoint_ratio,
+          buffers_clean,
+          buffers_backend,
+          buffers_alloc,
+          buffers_checkpoint
+        FROM pg_stat_bgwriter
+      `);
+    } catch (e) {
+      // 某些云数据库可能限制此查询
+    }
+
+    sendSuccess(res, {
+      pool: poolStats,
+      database: {
+        name: process.env.DB_NAME || 'postgres',
+        size: dbSizeResult.rows[0]?.size || 'Unknown',
+        size_bytes: parseInt(dbSizeResult.rows[0]?.size_bytes || '0')
+      },
+      connections: connectionStatsResult.rows[0] || { total_connections: 0, active_connections: 0, idle_connections: 0 },
+      tables: tableStatsResult.rows,
+      indexes: indexStatsResult.rows,
+      dbStat: dbStatResult?.rows?.[0] || null,
+      tableIo: tableIoResult?.rows || [],
+      bgwriter: bgwriterResult?.rows?.[0] || null,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching monitor data:', error);
+    sendError(res, '获取监控数据失败', 500);
+  }
+});
+
+// 获取数据库版本和配置
+app.get(`${API_PREFIX}/dba/info`, async (req: Request, res: Response) => {
+  try {
+    // 获取 PostgreSQL 版本
+    const versionResult = await pool.query(`SELECT version()`);
+
+    // 获取一些关键配置参数
+    const configResult = await pool.query(`
+      SELECT name, setting, unit, short_desc
+      FROM pg_settings
+      WHERE name IN (
+        'max_connections', 'shared_buffers', 'work_mem',
+        'maintenance_work_mem', 'effective_cache_size', 'wal_buffers'
+      )
+    `);
+
+    sendSuccess(res, {
+      version: versionResult.rows[0]?.version || 'Unknown',
+      config: configResult.rows
+    });
+  } catch (error) {
+    console.error('Error fetching database info:', error);
+    sendError(res, '获取数据库信息失败', 500);
+  }
+});
+
+// VACUUM / ANALYZE 操作
+app.post(`${API_PREFIX}/dba/vacuum`, async (req: Request, res: Response) => {
+  try {
+    const { tableName, mode } = req.body;
+
+    if (!tableName) {
+      return sendError(res, '请提供表名');
+    }
+
+    // 验证表名是否存在，防止 SQL 注入
+    const tableCheck = await pool.query(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1`,
+      [tableName]
+    );
+
+    if (tableCheck.rows.length === 0) {
+      return sendError(res, `表 "${tableName}" 不存在`, 404);
+    }
+
+    // 根据模式执行不同操作
+    let sql = '';
+    let description = '';
+
+    switch (mode) {
+      case 'vacuum':
+        sql = `VACUUM "${tableName}"`;
+        description = '回收死行空间（不锁表）';
+        break;
+      case 'analyze':
+        sql = `ANALYZE "${tableName}"`;
+        description = '更新统计信息（不锁表）';
+        break;
+      case 'vacuum_full':
+        sql = `VACUUM FULL "${tableName}"`;
+        description = '完全重建表（会锁表！）';
+        break;
+      default:
+        return sendError(res, '无效的操作模式，支持: vacuum, analyze, vacuum_full');
+    }
+
+    console.log(`[VACUUM] 执行: ${sql}`);
+    const startTime = Date.now();
+    await pool.query(sql);
+    const elapsed = Date.now() - startTime;
+
+    sendSuccess(res, {
+      message: `${tableName} ${mode} 完成，${description}，耗时 ${elapsed}ms`,
+      tableName,
+      mode,
+      elapsed
+    });
+  } catch (error: any) {
+    console.error('VACUUM error:', error);
+    sendError(res, `操作失败: ${error.message}`, 500);
   }
 });
 
@@ -1883,4 +2387,13 @@ process.on('SIGTERM', async () => {
   console.log('SIGTERM signal received: closing HTTP server');
   await pool.end();
   process.exit(0);
+});
+
+// 防止未捕获的异常导致进程崩溃
+process.on('uncaughtException', (err) => {
+  console.error('[未捕获异常]', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[未处理的Promise拒绝]', reason);
 });

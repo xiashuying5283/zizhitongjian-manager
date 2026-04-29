@@ -9,7 +9,9 @@ import Dashboard from './components/Dashboard';
 import CharacterManagement from './components/CharacterManagement';
 import PositionsManagement from './components/PositionsManagement';
 import GeographyManagement from './components/GeographyManagement';
+import ParagraphsManagement from './components/ParagraphsManagement';
 import DbAdmin from './components/DbAdmin';
+import DatabaseMonitor from './components/DatabaseMonitor';
 import './App.css';
 
 const App: React.FC = () => {
@@ -65,7 +67,9 @@ const App: React.FC = () => {
             <Route path="characters/*" element={<CharacterManagement />} />
             <Route path="positions" element={<PositionsManagement />} />
             <Route path="geography" element={<GeographyManagement />} />
+            <Route path="paragraphs" element={<ParagraphsManagement />} />
             <Route path="dba" element={<DbAdmin />} />
+            <Route path="monitor" element={<DatabaseMonitor />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -45,6 +45,13 @@
   border-left: 3px solid transparent;
 }
 
+.table-item .table-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .table-item:hover {
   background-color: #f5f5f5;
 }
@@ -57,6 +64,17 @@
 .table-item .ant-tag {
   font-size: 11px;
   margin: 0;
+}
+
+.table-structure-button {
+  margin-left: 4px;
+  opacity: 0;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.table-item:hover .table-structure-button {
+  opacity: 1;
 }
 
 .db-main {
@@ -128,4 +146,32 @@
 .structure-panel {
   display: flex;
   flex-direction: column;
+}
+
+/* 监控面板样式 */
+.monitor-panel {
+  padding: 0 8px;
+}
+
+.monitor-panel .ant-statistic-title {
+  font-size: 12px;
+  color: #666;
+}
+
+.monitor-panel .ant-statistic-content {
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.monitor-panel .ant-card-body {
+  padding: 12px 16px;
+}
+
+/* SQL编辑器自动完成样式 */
+.sql-editor .ant-select-dropdown {
+  font-family: monospace;
+}
+
+.sql-editor .ant-select-item-option-content {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
 }

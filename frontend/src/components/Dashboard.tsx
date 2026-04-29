@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Row, Col, Statistic, Typography, Divider, Spin } from 'antd';
-import { UserOutlined, TeamOutlined, EnvironmentOutlined, BookOutlined } from '@ant-design/icons';
+import { UserOutlined, TeamOutlined, EnvironmentOutlined, ReadOutlined } from '@ant-design/icons';
 import { getStats } from '../api';
 import './Dashboard.css';
 
@@ -11,11 +11,12 @@ interface Stats {
   characters: number;
   positions: number;
   geography: number;
+  paragraphs: number;
 }
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
-  const [stats, setStats] = useState<Stats>({ characters: 0, positions: 0, geography: 0 });
+  const [stats, setStats] = useState<Stats>({ characters: 0, positions: 0, geography: 0, paragraphs: 0 });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -96,13 +97,12 @@ const Dashboard: React.FC = () => {
           <Col xs={24} sm={12} lg={6}>
             <Card className="stat-card stat-card-info">
               <Statistic
-                title="数据来源"
-                value={294}
-                prefix={<BookOutlined />}
+                title="段落数据"
+                value={stats.paragraphs}
+                prefix={<ReadOutlined />}
                 valueStyle={{ color: '#7c3aed' }}
-                suffix="卷"
               />
-              <div className="stat-desc">资治通鉴总卷数</div>
+              <div className="stat-desc">资治通鉴原文段落</div>
             </Card>
           </Col>
         </Row>
@@ -155,6 +155,21 @@ const Dashboard: React.FC = () => {
               <div className="action-content">
                 <div className="action-title">地理管理</div>
                 <div className="action-desc">管理历史地名、行政区划、地理变迁</div>
+              </div>
+            </Card>
+          </Col>
+          <Col xs={24} sm={12} md={8}>
+            <Card
+              className="action-card"
+              hoverable
+              onClick={() => navigate('/paragraphs')}
+            >
+              <div className="action-icon" style={{ background: 'linear-gradient(135deg, #7c3aed, #a78bfa)' }}>
+                <ReadOutlined />
+              </div>
+              <div className="action-content">
+                <div className="action-title">段落管理</div>
+                <div className="action-desc">管理资治通鉴原文段落、校对与修订</div>
               </div>
             </Card>
           </Col>

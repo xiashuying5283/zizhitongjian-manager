@@ -1,0 +1,172 @@
+.database-monitor {
+  padding: 24px;
+  background: #f6f7f9;
+  min-height: 100%;
+}
+
+.monitor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.monitor-header h2 {
+  margin: 0;
+  color: #1a1a1a;
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.monitor-header h2 .anticon {
+  color: #1890ff;
+  font-size: 24px;
+}
+
+.monitor-subtitle {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.monitor-actions {
+  display: flex;
+  align-items: center;
+}
+
+.monitor-section {
+  margin-bottom: 20px;
+}
+
+.monitor-section-title {
+  margin: 0 0 10px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.monitor-footer {
+  margin-top: 24px;
+  text-align: center;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+  color: #64748b;
+  font-size: 12px;
+}
+
+/* 卡片样式优化 */
+.database-monitor .ant-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.database-monitor .ant-card-head {
+  background: #fff;
+  border-bottom: 1px solid #eef2f7;
+  min-height: 40px;
+}
+
+.database-monitor .ant-card-head-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #262626;
+}
+
+.database-monitor .ant-card-body {
+  padding: 14px 16px;
+}
+
+/* 统计卡片样式 */
+.database-monitor .ant-statistic-title {
+  font-size: 12px;
+  color: #8c8c8c;
+  margin-bottom: 8px;
+}
+
+.database-monitor .ant-statistic-content {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.database-monitor .overview-card {
+  height: 100%;
+}
+
+.database-monitor .overview-card .ant-card-body {
+  min-height: 88px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.database-monitor .overview-card .ant-statistic-content {
+  white-space: nowrap;
+}
+
+.database-monitor .overview-card .ant-progress {
+  width: 100%;
+  margin-top: 6px !important;
+}
+
+/* 图表容器 */
+.recharts-wrapper {
+  border-radius: 4px;
+}
+
+/* 表格样式 */
+.database-monitor .ant-table {
+  font-size: 12px;
+}
+
+.database-monitor .ant-table-thead > tr > th {
+  background: #fafafa;
+  font-weight: 500;
+  padding: 8px 12px;
+}
+
+.database-monitor .ant-table-tbody > tr > td {
+  padding: 8px 12px;
+}
+
+.database-monitor .config-description {
+  display: block;
+  white-space: normal;
+  line-height: 1.55;
+  color: #475569;
+}
+
+/* 响应式 */
+@media (max-width: 1200px) {
+  .database-monitor {
+    padding: 16px;
+  }
+
+  .monitor-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .monitor-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .monitor-header h2 {
+    font-size: 18px;
+  }
+}
+
+/* 需要优化的表行高亮 */
+.database-monitor .row-needs-vacuum {
+  background: #fffbe6 !important;
+}
+
+.database-monitor .row-needs-vacuum:hover > td {
+  background: #fff1b8 !important;
+}

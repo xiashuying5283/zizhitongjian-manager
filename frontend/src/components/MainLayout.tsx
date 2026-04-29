@@ -102,6 +102,8 @@ const MainLayout: React.FC<MainLayoutProps> = ({ username }) => {
         return '官职管理';
       case 'geography':
         return '地理管理';
+      case 'paragraphs':
+        return '段落管理';
       case 'dba':
         return '数据库管理';
       default:
