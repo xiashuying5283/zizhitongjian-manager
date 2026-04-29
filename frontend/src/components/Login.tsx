@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Form, Input, Button, Card, message } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { login } from '../api';
+import { getApiErrorMessage } from '../utils/errors';
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -16,8 +17,8 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       await login(values.username, values.password);
       message.success('登录成功');
       onLoginSuccess();
-    } catch (error: any) {
-      message.error(error.response?.data?.error || '登录失败');
+    } catch (error: unknown) {
+      message.error(getApiErrorMessage(error, '登录失败'));
     } finally {
       setLoading(false);
     }

@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, Table, Input, Button, message, Tabs, Spin, Tag, Typography, Empty, Modal } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { PlayCircleOutlined, ReloadOutlined, TableOutlined, FormatPainterOutlined, PlusOutlined, CloseOutlined, WarningOutlined } from '@ant-design/icons';
 import { getTables, getTableInfo, executeQuery } from '../api';
+import type { SqlQueryResult, SqlValue } from '../types';
+import { getApiErrorMessage } from '../utils/errors';
 import './DbAdmin.css';
 
 const { TextArea } = Input;
@@ -27,20 +29,19 @@ interface TableDetail {
   rowCount: number;
 }
 
-interface QueryResult {
-  rows: any[];
-  rowCount: number;
-  fields: string[];
-  elapsed: number;
-}
-
 interface QueryTab {
   key: string;
   title: string;
   sql: string;
-  result: QueryResult | null;
+  result: SqlQueryResult | null;
   loading: boolean;
 }
+
+type TextAreaHandle = TextAreaRef & {
+  resizableTextArea?: {
+    textArea?: HTMLTextAreaElement;
+  };
+};
 
 let tabIdCounter = 1;
 
@@ -117,12 +118,12 @@ const DbAdmin: React.FC = () => {
   }, []);
 
   // 获取当前活动的标签页
-  const getCurrentTab = () => queryTabs.find(t => t.key === activeTabKey);
-  const updateCurrentTab = (updates: Partial<QueryTab>) => {
+  const getCurrentTab = useCallback(() => queryTabs.find(t => t.key === activeTabKey), [activeTabKey, queryTabs]);
+  const updateCurrentTab = useCallback((updates: Partial<QueryTab>) => {
     setQueryTabs(tabs => tabs.map(t =>
       t.key === activeTabKey ? { ...t, ...updates } : t
     ));
-  };
+  }, [activeTabKey]);
 
   const focusSqlEditor = () => {
     setTimeout(() => {
@@ -186,7 +187,7 @@ const DbAdmin: React.FC = () => {
       setTables(data);
       // 提取表名用于提示
       setTableNames(data.map((t: TableInfo) => t.table_name));
-    } catch (error) {
+    } catch {
       message.error('加载表列表失败');
     } finally {
       setLoading(false);
@@ -200,7 +201,7 @@ const DbAdmin: React.FC = () => {
       setTableDetail(data);
       setSelectedTable(tableName);
       return true;
-    } catch (error) {
+    } catch {
       message.error('加载表结构失败');
       return false;
     } finally {
@@ -299,12 +300,12 @@ const DbAdmin: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTabKey]);
+  }, [activeTabKey, updateCurrentTab]);
 
   // 获取原生 textarea 元素
   const getTextAreaElement = (): HTMLTextAreaElement | null => {
-    const ref = textAreaRef.current as any;
-    return ref?.resizableTextArea?.textArea || ref;
+    const ref = textAreaRef.current as TextAreaHandle | null;
+    return ref?.resizableTextArea?.textArea || null;
   };
 
   // 保存选中内容
@@ -489,9 +490,9 @@ const DbAdmin: React.FC = () => {
       const result = await executeQuery(sqlToExecute, confirmWrite);
       updateCurrentTab({ result, loading: false });
       message.success(`执行成功，${result.rowCount} 行受影响，耗时 ${result.elapsed}ms`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       updateCurrentTab({ loading: false });
-      message.error(error.response?.data?.error || '执行失败');
+      message.error(getApiErrorMessage(error, '执行失败'));
     }
   };
 
@@ -508,7 +509,7 @@ const DbAdmin: React.FC = () => {
       title: '类型',
       key: 'type',
       width: 180,
-      render: (_: any, record: ColumnInfo) => <Tag color="blue">{formatDataType(record)}</Tag>
+      render: (_: unknown, record: ColumnInfo) => <Tag color="blue">{formatDataType(record)}</Tag>
     },
     {
       title: '可空',
@@ -525,7 +526,7 @@ const DbAdmin: React.FC = () => {
     },
   ];
 
-  const renderQueryResult = (result: QueryResult | null) => {
+  const renderQueryResult = (result: SqlQueryResult | null) => {
     if (!result) {
       return <Empty description="执行查询查看结果" />;
     }
@@ -535,7 +536,7 @@ const DbAdmin: React.FC = () => {
       dataIndex: field,
       key: field,
       ellipsis: true,
-      render: (value: any) => {
+      render: (value: SqlValue) => {
         if (value === null) return <Text type="secondary">NULL</Text>;
         if (typeof value === 'object') return <Text code>{JSON.stringify(value)}</Text>;
         return String(value);

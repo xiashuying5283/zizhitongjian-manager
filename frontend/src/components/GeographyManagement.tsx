@@ -58,7 +58,7 @@ const GeographyManagement: React.FC = () => {
       });
       setData(result.geography);
       setTotal(result.total);
-    } catch (error) {
+    } catch {
       message.error('加载失败');
     } finally {
       setLoading(false);
@@ -89,7 +89,7 @@ const GeographyManagement: React.FC = () => {
       await deleteGeography(id);
       message.success('删除成功');
       fetchData();
-    } catch (error) {
+    } catch {
       message.error('删除失败');
     }
   };
@@ -110,7 +110,7 @@ const GeographyManagement: React.FC = () => {
       }
       setModalVisible(false);
       fetchData();
-    } catch (error) {
+    } catch {
       message.error(editingItem ? '更新失败' : '创建失败');
     }
   };
@@ -152,7 +152,7 @@ const GeographyManagement: React.FC = () => {
       title: '坐标',
       key: 'coords',
       width: 140,
-      render: (_: any, record: Geography) => 
+      render: (_: unknown, record: Geography) => 
         record.lng && record.lat ? `${record.lng}, ${record.lat}` : '-',
     },
     {
@@ -165,7 +165,7 @@ const GeographyManagement: React.FC = () => {
       title: '操作',
       key: 'action',
       width: 120,
-      render: (_: any, record: Geography) => (
+      render: (_: unknown, record: Geography) => (
         <Space>
           <Button
             type="link"

@@ -1,8 +1,11 @@
 import axios from 'axios';
 import type {
   ApiResponse,
+  CharacterSearchResponse,
   CharactersByInitialResponse,
   CharacterDetail,
+  DbInfo,
+  DbMonitorInfo,
   EnrichRequest,
   EnrichResponse,
   EnrichConfirmRequest,
@@ -13,6 +16,7 @@ import type {
   ParagraphGroupedResponse,
   Position,
   PositionListResponse,
+  SqlQueryResult,
 } from '../types';
 
 const api = axios.create({
@@ -75,13 +79,7 @@ export const searchCharacters = async (
     name,
   });
   if (era) params.append('era', era);
-  const response = await api.get<ApiResponse<{
-    characters: any[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }>>(`/characters?${params}`);
+  const response = await api.get<ApiResponse<CharacterSearchResponse>>(`/characters?${params}`);
   return response.data.data;
 };
 
@@ -409,92 +407,12 @@ export const getTableInfo = async (tableName: string) => {
 // 执行 SQL 查询
 export const executeQuery = async (sql: string, confirm = false) => {
   const url = confirm ? '/dba/query?confirm=1' : '/dba/query';
-  const response = await api.post<ApiResponse<{
-    rows: any[];
-    rowCount: number;
-    fields: string[];
-    elapsed: number;
-  }>>(url, { sql });
+  const response = await api.post<ApiResponse<SqlQueryResult>>(url, { sql });
   return response.data.data;
 };
 
 // 获取数据库监控信息
 export const getDbMonitorInfo = async () => {
-  type DbMonitorInfo = {
-    pool: {
-      total: number;
-      idle: number;
-      waiting: number;
-    };
-    database: {
-      name: string;
-      size: string;
-      size_bytes: number;
-    };
-    connections: {
-      total_connections: number;
-      active_connections: number;
-      idle_connections: number;
-    };
-    tables: Array<{
-      schemaname: string;
-      table_name: string;
-      live_rows: number;
-      dead_rows: number;
-      last_vacuum: string | null;
-      last_autovacuum: string | null;
-      last_analyze: string | null;
-      total_size: string;
-    }>;
-    indexes: Array<{
-      schemaname: string;
-      table_name: string;
-      index_name: string;
-      index_scans: number;
-      tuples_read: number;
-      tuples_fetched: number;
-    }>;
-    dbStat: {
-      numbackends: number;
-      xact_commit: number;
-      xact_rollback: number;
-      blks_read: number;
-      blks_hit: number;
-      cache_hit_ratio: number;
-      tup_returned: number;
-      tup_fetched: number;
-      tup_inserted: number;
-      tup_updated: number;
-      tup_deleted: number;
-      conflicts: number;
-      deadlocks: number;
-    } | null;
-    tableIo: Array<{
-      schemaname: string;
-      table_name: string;
-      heap_blks_read: number;
-      heap_blks_hit: number;
-      heap_hit_ratio: number;
-      idx_blks_read: number;
-      idx_blks_hit: number;
-      idx_hit_ratio: number;
-      toast_blks_read: number;
-      toast_blks_hit: number;
-      tidx_blks_read: number;
-      tidx_blks_hit: number;
-    }>;
-    bgwriter: {
-      checkpoints_timed: number;
-      checkpoints_req: number;
-      req_checkpoint_ratio: number;
-      buffers_clean: number;
-      buffers_backend: number;
-      buffers_alloc: number;
-      buffers_checkpoint: number;
-    } | null;
-    timestamp: string;
-  };
-
   const response = await api.get<ApiResponse<DbMonitorInfo>>('/dba/monitor');
   const data = response.data.data;
 
@@ -566,15 +484,7 @@ export const getDbMonitorInfo = async () => {
 
 // 获取数据库版本和配置
 export const getDbInfo = async () => {
-  const response = await api.get<ApiResponse<{
-    version: string;
-    config: Array<{
-      name: string;
-      setting: string;
-      unit: string | null;
-      short_desc: string;
-    }>;
-  }>>('/dba/info');
+  const response = await api.get<ApiResponse<DbInfo>>('/dba/info');
   return response.data.data;
 };
 

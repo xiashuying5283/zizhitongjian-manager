@@ -6,51 +6,22 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
-const pg_1 = require("pg");
 const openai_1 = __importDefault(require("openai"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const pinyin_pro_1 = require("pinyin-pro");
-const crypto_1 = __importDefault(require("crypto"));
+const db_1 = require("./db");
+const auth_1 = require("./auth");
 // 加载环境变量
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 9092;
 const HOST = process.env.HOST || '0.0.0.0';
-// 登录配置
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto_1.default.randomBytes(32).toString('hex');
-const COOKIE_MAX_AGE = 24 * 60 * 60 * 1000; // 24 小时
 // OpenAI 客户端初始化
 const openai = new openai_1.default({
     apiKey: process.env.OPENAI_API_KEY || '',
     baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
 });
-// 数据库连接
-const pool = new pg_1.Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false
-    },
-    max: 5,
-    idleTimeoutMillis: 60000, // 空闲 60 秒再释放，避免被远端断开
-    connectionTimeoutMillis: 10000,
-    keepAlive: true,
-    keepAliveInitialDelayMillis: 5000,
-});
-// 监听连接池错误，防止单个连接异常导致进程崩溃
-pool.on('error', (err) => {
-    console.error('[数据库连接池错误]', err.message);
-});
-// 定期健康检查，探测并淘汰死连接
-setInterval(async () => {
-    try {
-        await pool.query('SELECT 1');
-    }
-    catch (e) {
-        console.error('[数据库健康检查失败]', e.message);
-    }
-}, 30000);
+(0, db_1.startPoolHealthCheck)();
 // 中间件
 app.use((0, cors_1.default)({
     origin: true,
@@ -58,37 +29,6 @@ app.use((0, cors_1.default)({
 }));
 app.use(express_1.default.json());
 app.use((0, cookie_parser_1.default)());
-// 生成 session token
-function generateToken() {
-    return crypto_1.default.randomBytes(32).toString('hex');
-}
-// 简单的 session 存储（生产环境建议用 Redis）
-const sessions = new Map();
-// 清理过期 session
-setInterval(() => {
-    const now = Date.now();
-    for (const [token, session] of sessions) {
-        if (session.expires < now) {
-            sessions.delete(token);
-        }
-    }
-}, 60 * 60 * 1000); // 每小时清理一次
-// 认证中间件
-const authMiddleware = (req, res, next) => {
-    const token = req.cookies.session_token;
-    if (!token) {
-        return res.status(401).json({ success: false, error: '未登录', code: 'UNAUTHORIZED' });
-    }
-    const session = sessions.get(token);
-    if (!session || session.expires < Date.now()) {
-        sessions.delete(token);
-        return res.status(401).json({ success: false, error: '登录已过期', code: 'UNAUTHORIZED' });
-    }
-    // 续期 session
-    session.expires = Date.now() + COOKIE_MAX_AGE;
-    req.user = { username: session.username };
-    next();
-};
 // API 路由前缀
 const API_PREFIX = '/api';
 // 辅助函数：发送成功响应
@@ -99,52 +39,7 @@ function sendSuccess(res, data) {
 function sendError(res, message, statusCode = 400) {
     res.status(statusCode).json({ success: false, error: message });
 }
-// 登录接口（无需认证）
-app.post(`${API_PREFIX}/login`, (req, res) => {
-    const { username, password } = req.body;
-    if (!username || !password) {
-        return sendError(res, '用户名和密码不能为空');
-    }
-    if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
-        console.log(`[登录失败] 用户名或密码错误: ${username}`);
-        return sendError(res, '用户名或密码错误', 401);
-    }
-    const token = generateToken();
-    sessions.set(token, {
-        username,
-        expires: Date.now() + COOKIE_MAX_AGE
-    });
-    res.cookie('session_token', token, {
-        httpOnly: true,
-        maxAge: COOKIE_MAX_AGE,
-        sameSite: 'strict',
-        secure: process.env.NODE_ENV === 'production'
-    });
-    console.log(`[登录成功] ${username}`);
-    sendSuccess(res, { username, message: '登录成功' });
-});
-// 登出接口
-app.post(`${API_PREFIX}/logout`, (req, res) => {
-    const token = req.cookies.session_token;
-    if (token) {
-        sessions.delete(token);
-    }
-    res.clearCookie('session_token');
-    sendSuccess(res, { message: '已登出' });
-});
-// 检查登录状态
-app.get(`${API_PREFIX}/check-auth`, (req, res) => {
-    const token = req.cookies.session_token;
-    if (!token) {
-        return sendSuccess(res, { authenticated: false });
-    }
-    const session = sessions.get(token);
-    if (!session || session.expires < Date.now()) {
-        sessions.delete(token);
-        return sendSuccess(res, { authenticated: false });
-    }
-    sendSuccess(res, { authenticated: true, username: session.username });
-});
+(0, auth_1.registerAuthRoutes)(app, API_PREFIX, sendSuccess, sendError);
 // ============ 维基百科代理接口（无需认证） ============
 app.get(`${API_PREFIX}/wiki-baike`, async (req, res) => {
     try {
@@ -261,7 +156,7 @@ app.get(`${API_PREFIX}/wiki-baike`, async (req, res) => {
     }
 });
 // 对其他所有 API 路由应用认证中间件
-app.use(`${API_PREFIX}/*`, authMiddleware);
+app.use(`${API_PREFIX}/*`, auth_1.authMiddleware);
 // 辅助函数：获取拼音首字母
 function getPinyinInitial(name) {
     if (!name)
@@ -295,12 +190,12 @@ function getFirstCharPinyin(name) {
 app.get(`${API_PREFIX}/stats`, async (req, res) => {
     try {
         // 获取各模块数量
-        const charactersResult = await pool.query('SELECT COUNT(*) as count FROM characters');
-        const positionsResult = await pool.query('SELECT COUNT(*) as count FROM official_posts');
-        const geographyResult = await pool.query('SELECT COUNT(*) as count FROM geography');
+        const charactersResult = await db_1.pool.query('SELECT COUNT(*) as count FROM characters');
+        const positionsResult = await db_1.pool.query('SELECT COUNT(*) as count FROM official_posts');
+        const geographyResult = await db_1.pool.query('SELECT COUNT(*) as count FROM geography');
         let paragraphsCount = 0;
         try {
-            const paragraphsResult = await pool.query('SELECT COUNT(*) as count FROM zizhitongjian_paragraphs');
+            const paragraphsResult = await db_1.pool.query('SELECT COUNT(*) as count FROM zizhitongjian_paragraphs');
             paragraphsCount = parseInt(paragraphsResult.rows[0].count) || 0;
         }
         catch (e) {
@@ -346,11 +241,11 @@ app.get(`${API_PREFIX}/geography`, async (req, res) => {
             params.push(dynasty);
         }
         // 查询总数
-        const countResult = await pool.query(`SELECT COUNT(*) as total FROM geography ${whereClause}`, params);
+        const countResult = await db_1.pool.query(`SELECT COUNT(*) as total FROM geography ${whereClause}`, params);
         const total = parseInt(countResult.rows[0].total);
         const totalPages = Math.ceil(total / limit);
         // 查询数据
-        const dataResult = await pool.query(`SELECT * FROM geography ${whereClause} ORDER BY name LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`, [...params, limit, offset]);
+        const dataResult = await db_1.pool.query(`SELECT * FROM geography ${whereClause} ORDER BY name LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`, [...params, limit, offset]);
         sendSuccess(res, {
             geography: dataResult.rows.map(row => ({
                 ...row,
@@ -371,7 +266,7 @@ app.get(`${API_PREFIX}/geography`, async (req, res) => {
 app.get(`${API_PREFIX}/geography/:id`, async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query('SELECT * FROM geography WHERE id = $1', [id]);
+        const result = await db_1.pool.query('SELECT * FROM geography WHERE id = $1', [id]);
         if (result.rows.length === 0) {
             return sendError(res, '地理不存在', 404);
         }
@@ -395,11 +290,11 @@ app.post(`${API_PREFIX}/geography`, async (req, res) => {
         // 生成 slug（如果没有提供）
         const finalSlug = slug || name.toLowerCase().replace(/\s+/g, '-');
         // 检查 slug 是否已存在
-        const existResult = await pool.query('SELECT id FROM geography WHERE slug = $1', [finalSlug]);
+        const existResult = await db_1.pool.query('SELECT id FROM geography WHERE slug = $1', [finalSlug]);
         if (existResult.rows.length > 0) {
             return sendError(res, '该 slug 已存在');
         }
-        const result = await pool.query(`INSERT INTO geography (name, slug, category, level, dynasty, location, lng, lat, description, aliases, created_at, updated_at)
+        const result = await db_1.pool.query(`INSERT INTO geography (name, slug, category, level, dynasty, location, lng, lat, description, aliases, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
        RETURNING *`, [name, finalSlug, category || null, level || null, dynasty || null, location || null, lng || null, lat || null, description || null, JSON.stringify(aliases || [])]);
         sendSuccess(res, { ...result.rows[0], aliases: result.rows[0].aliases || [] });
@@ -460,7 +355,7 @@ app.put(`${API_PREFIX}/geography/:id`, async (req, res) => {
         updateFields.push(`updated_at = NOW()`);
         updateValues.push(id);
         if (updateFields.length > 1) {
-            const result = await pool.query(`UPDATE geography SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`, updateValues);
+            const result = await db_1.pool.query(`UPDATE geography SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`, updateValues);
             if (result.rows.length === 0) {
                 return sendError(res, '地理不存在', 404);
             }
@@ -479,7 +374,7 @@ app.put(`${API_PREFIX}/geography/:id`, async (req, res) => {
 app.delete(`${API_PREFIX}/geography/:id`, async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query('DELETE FROM geography WHERE id = $1 RETURNING id, name', [id]);
+        const result = await db_1.pool.query('DELETE FROM geography WHERE id = $1 RETURNING id, name', [id]);
         if (result.rows.length === 0) {
             return sendError(res, '地理不存在', 404);
         }
@@ -494,7 +389,7 @@ app.delete(`${API_PREFIX}/geography/:id`, async (req, res) => {
 // 获取卷名列表（用于筛选下拉框）
 app.get(`${API_PREFIX}/paragraphs/volumes`, async (req, res) => {
     try {
-        const result = await pool.query('SELECT DISTINCT volume_name FROM zizhitongjian_paragraphs WHERE volume_name IS NOT NULL ORDER BY volume_name');
+        const result = await db_1.pool.query('SELECT DISTINCT volume_name FROM zizhitongjian_paragraphs WHERE volume_name IS NOT NULL ORDER BY volume_name');
         sendSuccess(res, result.rows.map((r) => r.volume_name));
     }
     catch (error) {
@@ -530,7 +425,7 @@ app.get(`${API_PREFIX}/paragraphs`, async (req, res) => {
         }
         // 分组模式：按卷名分组返回
         if (grouped) {
-            const dataResult = await pool.query(`SELECT id, content, content_traditional, volume_name, year_mark, emperor,
+            const dataResult = await db_1.pool.query(`SELECT id, content, content_traditional, volume_name, year_mark, emperor,
                 with_notes, with_notes_traditional, translation, translation_traditional,
                 volume_number, bc_year, event_index, paragraph_index, is_chenguangyue
          FROM zizhitongjian_paragraphs ${whereClause} ORDER BY volume_name, id`, params);
@@ -550,10 +445,10 @@ app.get(`${API_PREFIX}/paragraphs`, async (req, res) => {
             sendSuccess(res, { groups: groupList, total: dataResult.rows.length });
             return;
         }
-        const countResult = await pool.query(`SELECT COUNT(*) as total FROM zizhitongjian_paragraphs ${whereClause}`, params);
+        const countResult = await db_1.pool.query(`SELECT COUNT(*) as total FROM zizhitongjian_paragraphs ${whereClause}`, params);
         const total = parseInt(countResult.rows[0].total);
         const totalPages = Math.ceil(total / limit);
-        const dataResult = await pool.query(`SELECT * FROM zizhitongjian_paragraphs ${whereClause} ORDER BY id LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`, [...params, limit, offset]);
+        const dataResult = await db_1.pool.query(`SELECT * FROM zizhitongjian_paragraphs ${whereClause} ORDER BY id LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`, [...params, limit, offset]);
         sendSuccess(res, {
             paragraphs: dataResult.rows,
             total,
@@ -571,7 +466,7 @@ app.get(`${API_PREFIX}/paragraphs`, async (req, res) => {
 app.get(`${API_PREFIX}/paragraphs/:id`, async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query('SELECT * FROM zizhitongjian_paragraphs WHERE id = $1', [id]);
+        const result = await db_1.pool.query('SELECT * FROM zizhitongjian_paragraphs WHERE id = $1', [id]);
         if (result.rows.length === 0) {
             return sendError(res, '段落不存在', 404);
         }
@@ -589,7 +484,7 @@ app.post(`${API_PREFIX}/paragraphs`, async (req, res) => {
         if (!content) {
             return sendError(res, '内容不能为空');
         }
-        const result = await pool.query(`INSERT INTO zizhitongjian_paragraphs
+        const result = await db_1.pool.query(`INSERT INTO zizhitongjian_paragraphs
         (content, content_traditional, volume_name, volume_number,
          year_mark, emperor, bc_year, event_index, paragraph_index,
          with_notes, with_notes_traditional, translation, translation_traditional,
@@ -642,7 +537,7 @@ app.put(`${API_PREFIX}/paragraphs/:id`, async (req, res) => {
             return sendError(res, '没有要更新的字段', 400);
         }
         updateValues.push(id);
-        const result = await pool.query(`UPDATE zizhitongjian_paragraphs SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`, updateValues);
+        const result = await db_1.pool.query(`UPDATE zizhitongjian_paragraphs SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`, updateValues);
         if (result.rows.length === 0) {
             return sendError(res, '段落不存在', 404);
         }
@@ -657,7 +552,7 @@ app.put(`${API_PREFIX}/paragraphs/:id`, async (req, res) => {
 app.delete(`${API_PREFIX}/paragraphs/:id`, async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query('DELETE FROM zizhitongjian_paragraphs WHERE id = $1 RETURNING id', [id]);
+        const result = await db_1.pool.query('DELETE FROM zizhitongjian_paragraphs WHERE id = $1 RETURNING id', [id]);
         if (result.rows.length === 0) {
             return sendError(res, '段落不存在', 404);
         }
@@ -696,11 +591,11 @@ app.get(`${API_PREFIX}/positions`, async (req, res) => {
             params.push(dynasty);
         }
         // 查询总数
-        const countResult = await pool.query(`SELECT COUNT(*) as total FROM official_posts ${whereClause}`, params);
+        const countResult = await db_1.pool.query(`SELECT COUNT(*) as total FROM official_posts ${whereClause}`, params);
         const total = parseInt(countResult.rows[0].total);
         const totalPages = Math.ceil(total / limit);
         // 查询数据
-        const dataResult = await pool.query(`SELECT * FROM official_posts ${whereClause} ORDER BY name LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`, [...params, limit, offset]);
+        const dataResult = await db_1.pool.query(`SELECT * FROM official_posts ${whereClause} ORDER BY name LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`, [...params, limit, offset]);
         sendSuccess(res, {
             positions: dataResult.rows.map(row => ({
                 ...row,
@@ -721,7 +616,7 @@ app.get(`${API_PREFIX}/positions`, async (req, res) => {
 app.get(`${API_PREFIX}/positions/:id`, async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query('SELECT * FROM official_posts WHERE id = $1', [id]);
+        const result = await db_1.pool.query('SELECT * FROM official_posts WHERE id = $1', [id]);
         if (result.rows.length === 0) {
             return sendError(res, '官职不存在', 404);
         }
@@ -743,11 +638,11 @@ app.post(`${API_PREFIX}/positions`, async (req, res) => {
             return sendError(res, '名称不能为空');
         }
         // 检查是否已存在
-        const existResult = await pool.query('SELECT id FROM official_posts WHERE name = $1', [name]);
+        const existResult = await db_1.pool.query('SELECT id FROM official_posts WHERE name = $1', [name]);
         if (existResult.rows.length > 0) {
             return sendError(res, '该官职已存在');
         }
-        const result = await pool.query(`INSERT INTO official_posts (name, description, category, dynasty, rank, aliases, created_at, updated_at)
+        const result = await db_1.pool.query(`INSERT INTO official_posts (name, description, category, dynasty, rank, aliases, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
        RETURNING *`, [name, description || null, category || null, dynasty || null, rank || null, JSON.stringify(aliases || [])]);
         sendSuccess(res, { ...result.rows[0], aliases: result.rows[0].aliases || [] });
@@ -792,7 +687,7 @@ app.put(`${API_PREFIX}/positions/:id`, async (req, res) => {
         updateFields.push(`updated_at = NOW()`);
         updateValues.push(id);
         if (updateFields.length > 1) {
-            const result = await pool.query(`UPDATE official_posts SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`, updateValues);
+            const result = await db_1.pool.query(`UPDATE official_posts SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`, updateValues);
             if (result.rows.length === 0) {
                 return sendError(res, '官职不存在', 404);
             }
@@ -811,7 +706,7 @@ app.put(`${API_PREFIX}/positions/:id`, async (req, res) => {
 app.delete(`${API_PREFIX}/positions/:id`, async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query('DELETE FROM official_posts WHERE id = $1 RETURNING id, name', [id]);
+        const result = await db_1.pool.query('DELETE FROM official_posts WHERE id = $1 RETURNING id, name', [id]);
         if (result.rows.length === 0) {
             return sendError(res, '官职不存在', 404);
         }
@@ -830,7 +725,7 @@ app.post(`${API_PREFIX}/characters`, async (req, res) => {
             return sendError(res, '姓名不能为空');
         }
         // 检查是否已存在（同名+同title视为同一人物）
-        const existResult = await pool.query('SELECT id FROM characters WHERE name = $1 AND (title = $2 OR (title IS NULL AND $2 IS NULL))', [name, title || null]);
+        const existResult = await db_1.pool.query('SELECT id FROM characters WHERE name = $1 AND (title = $2 OR (title IS NULL AND $2 IS NULL))', [name, title || null]);
         if (existResult.rows.length > 0) {
             return sendError(res, '该人物已存在');
         }
@@ -838,7 +733,7 @@ app.post(`${API_PREFIX}/characters`, async (req, res) => {
         const pinyinInitial = getPinyinInitial(name);
         const firstCharPinyin = getFirstCharPinyin(name);
         // 插入新人物
-        const result = await pool.query(`INSERT INTO characters (name, era, title, hometown, aliases, summary, pinyin_initial, first_char_pinyin, created_at, updated_at)
+        const result = await db_1.pool.query(`INSERT INTO characters (name, era, title, hometown, aliases, summary, pinyin_initial, first_char_pinyin, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
        RETURNING id, name`, [name, era || null, title || null, hometown || null, JSON.stringify(aliases || []), summary || null, pinyinInitial, firstCharPinyin]);
         sendSuccess(res, result.rows[0]);
@@ -870,11 +765,11 @@ app.get(`${API_PREFIX}/characters`, async (req, res) => {
             paramIndex++;
         }
         // 查询总数
-        const countResult = await pool.query(`SELECT COUNT(*) as total FROM characters ${whereClause}`, params);
+        const countResult = await db_1.pool.query(`SELECT COUNT(*) as total FROM characters ${whereClause}`, params);
         const total = parseInt(countResult.rows[0].total);
         const totalPages = Math.ceil(total / limit);
         // 查询数据
-        const dataResult = await pool.query(`SELECT id, name, title, era, birth_year, death_year, summary 
+        const dataResult = await db_1.pool.query(`SELECT id, name, title, era, birth_year, death_year, summary 
        FROM characters ${whereClause} 
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`, [...params, limit, offset]);
         // 添加拼音首字母并按拼音排序
@@ -917,7 +812,7 @@ app.get(`${API_PREFIX}/characters/by-initial/:letter`, async (req, res) => {
             params.push(era);
         }
         // 直接使用索引查询，不再全表扫描
-        const dataResult = await pool.query(`SELECT id, name, title, era, birth_year, death_year, summary, updated_at, first_char_pinyin
+        const dataResult = await db_1.pool.query(`SELECT id, name, title, era, birth_year, death_year, summary, updated_at, first_char_pinyin
        FROM characters ${whereClause}
        ORDER BY first_char_pinyin, name`, params);
         // 按第一个字的拼音分组（数据已排序）
@@ -957,13 +852,13 @@ app.get(`${API_PREFIX}/characters/:id`, async (req, res) => {
     try {
         const { id } = req.params;
         // 查询人物信息
-        const charResult = await pool.query(`SELECT * FROM characters WHERE id = $1`, [id]);
+        const charResult = await db_1.pool.query(`SELECT * FROM characters WHERE id = $1`, [id]);
         if (charResult.rows.length === 0) {
             return sendError(res, '人物不存在', 404);
         }
         const character = charResult.rows[0];
         // 查询该人物发出的关系
-        const relationsResult = await pool.query(`SELECT cr.id, cr.relation_type, cr.description,
+        const relationsResult = await db_1.pool.query(`SELECT cr.id, cr.relation_type, cr.description,
               c.id as "related_character_id", c.name as "related_name", c.title as "related_title", c.era as "related_era"
        FROM character_relations cr
        JOIN characters c ON cr.related_character_id = c.id
@@ -980,7 +875,7 @@ app.get(`${API_PREFIX}/characters/:id`, async (req, res) => {
             }
         }));
         // 查询指向该人物的关系
-        const reverseRelationsResult = await pool.query(`SELECT cr.id, cr.relation_type, cr.description,
+        const reverseRelationsResult = await db_1.pool.query(`SELECT cr.id, cr.relation_type, cr.description,
               c.id as "character_id", c.name as "character_name", c.title as "character_title", c.era as "character_era"
        FROM character_relations cr
        JOIN characters c ON cr.character_id = c.id
@@ -1020,7 +915,7 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req, res) => {
             return sendError(res, '未配置 OPENAI_API_KEY 环境变量', 500);
         }
         // 1. 查找人物（支持按名称或别名查找）
-        const charResult = await pool.query(`SELECT id, name, era, title, summary, aliases, hometown FROM characters WHERE name = $1 OR aliases::text ILIKE $2`, [name, `%"${name}"%`]);
+        const charResult = await db_1.pool.query(`SELECT id, name, era, title, summary, aliases, hometown FROM characters WHERE name = $1 OR aliases::text ILIKE $2`, [name, `%"${name}"%`]);
         if (charResult.rows.length === 0) {
             return sendError(res, '未找到该人物', 404);
         }
@@ -1029,7 +924,7 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req, res) => {
         let passages = '';
         let tongjianCount = 0;
         try {
-            const paraResult = await pool.query(`SELECT content, volume_name, year_mark FROM zizhitongjian_paragraphs 
+            const paraResult = await db_1.pool.query(`SELECT content, volume_name, year_mark FROM zizhitongjian_paragraphs 
          WHERE content ILIKE $1 ORDER BY id LIMIT 20`, [`%${character.name}%`]);
             tongjianCount = paraResult.rows.length;
             if (paraResult.rows.length > 0) {
@@ -1159,7 +1054,7 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req, res) => {
         if (dryRun) {
             // 检查关系中哪些人物已存在、哪些不存在
             const relationshipsWithStatus = await Promise.all((extracted.relationships || []).map(async (rel) => {
-                const relResult = await pool.query(`SELECT id, title, era FROM characters WHERE name = $1 OR aliases::text ILIKE $2`, [rel.name, `%"${rel.name}"%`]);
+                const relResult = await db_1.pool.query(`SELECT id, title, era FROM characters WHERE name = $1 OR aliases::text ILIKE $2`, [rel.name, `%"${rel.name}"%`]);
                 if (relResult.rows.length > 0) {
                     return {
                         ...rel,
@@ -1229,12 +1124,12 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req, res) => {
         }
         if (updateParams.length > 0) {
             updateParams.push(character.id);
-            await pool.query(`UPDATE characters SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`, updateParams);
+            await db_1.pool.query(`UPDATE characters SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`, updateParams);
         }
         // 7. 处理人物关系
         const addedRelations = [];
         for (const rel of extracted.relationships || []) {
-            const relResult = await pool.query(`SELECT id FROM characters WHERE name = $1 OR aliases::text ILIKE $2`, [rel.name, `%"${rel.name}"%`]);
+            const relResult = await db_1.pool.query(`SELECT id FROM characters WHERE name = $1 OR aliases::text ILIKE $2`, [rel.name, `%"${rel.name}"%`]);
             let relatedId;
             let created = false;
             if (relResult.rows.length > 0) {
@@ -1244,15 +1139,15 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req, res) => {
                 // 自动创建不存在的人物
                 const pinyinInitial = getPinyinInitial(rel.name);
                 const firstCharPinyin = getFirstCharPinyin(rel.name);
-                const createResult = await pool.query(`INSERT INTO characters (name, era, pinyin_initial, first_char_pinyin, created_at, updated_at) 
+                const createResult = await db_1.pool.query(`INSERT INTO characters (name, era, pinyin_initial, first_char_pinyin, created_at, updated_at) 
            VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id`, [rel.name, extracted.era || character.era || '待定', pinyinInitial, firstCharPinyin]);
                 relatedId = createResult.rows[0].id;
                 created = true;
             }
             // 检查关系是否已存在
-            const existResult = await pool.query(`SELECT id FROM character_relations WHERE character_id = $1 AND related_character_id = $2`, [character.id, relatedId]);
+            const existResult = await db_1.pool.query(`SELECT id FROM character_relations WHERE character_id = $1 AND related_character_id = $2`, [character.id, relatedId]);
             if (existResult.rows.length === 0) {
-                await pool.query(`INSERT INTO character_relations (character_id, related_character_id, relation_type, description, created_at)
+                await db_1.pool.query(`INSERT INTO character_relations (character_id, related_character_id, relation_type, description, created_at)
            VALUES ($1, $2, $3, $4, NOW())`, [character.id, relatedId, rel.relation, rel.description]);
             }
             addedRelations.push({
@@ -1286,14 +1181,14 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req, res) => {
 });
 // 4. 确认写入
 app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req, res) => {
-    const client = await pool.connect();
+    const { characterId, name, era, title, hometown, aliases, summary, birth_year, death_year, relationships, createMissing = false // 是否自动创建不存在的人物
+     } = req.body;
+    if (!characterId) {
+        return sendError(res, 'characterId 不能为空');
+    }
+    const client = await db_1.pool.connect();
     try {
         await client.query('BEGIN');
-        const { characterId, name, era, title, hometown, aliases, summary, birth_year, death_year, relationships, createMissing = false // 是否自动创建不存在的人物
-         } = req.body;
-        if (!characterId) {
-            return sendError(res, 'characterId 不能为空');
-        }
         // 更新人物信息
         const updateFields = [];
         const updateValues = [];
@@ -1422,7 +1317,7 @@ app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req, res) => {
 app.delete(`${API_PREFIX}/characters/:id/relations/:relationId`, async (req, res) => {
     try {
         const { id, relationId } = req.params;
-        const result = await pool.query(`DELETE FROM character_relations WHERE id = $1 AND (character_id = $2 OR related_character_id = $2) RETURNING id`, [relationId, id]);
+        const result = await db_1.pool.query(`DELETE FROM character_relations WHERE id = $1 AND (character_id = $2 OR related_character_id = $2) RETURNING id`, [relationId, id]);
         if (result.rows.length === 0) {
             return sendError(res, '关系不存在', 404);
         }
@@ -1435,16 +1330,15 @@ app.delete(`${API_PREFIX}/characters/:id/relations/:relationId`, async (req, res
 });
 // 5. 删除人物
 app.delete(`${API_PREFIX}/characters/:id`, async (req, res) => {
-    const client = await pool.connect();
+    const { id } = req.params;
+    const charResult = await db_1.pool.query(`SELECT name FROM characters WHERE id = $1`, [id]);
+    if (charResult.rows.length === 0) {
+        return sendError(res, '人物不存在', 404);
+    }
+    const name = charResult.rows[0].name;
+    const client = await db_1.pool.connect();
     try {
         await client.query('BEGIN');
-        const { id } = req.params;
-        // 查询人物信息
-        const charResult = await client.query(`SELECT name FROM characters WHERE id = $1`, [id]);
-        if (charResult.rows.length === 0) {
-            return sendError(res, '人物不存在', 404);
-        }
-        const name = charResult.rows[0].name;
         // 删除该人物发出的关系
         await client.query(`DELETE FROM character_relations WHERE character_id = $1`, [id]);
         // 删除指向该人物的关系
@@ -1629,7 +1523,7 @@ app.get(`${API_PREFIX}/baidu-baike`, async (req, res) => {
 // 获取所有表
 app.get(`${API_PREFIX}/dba/tables`, async (req, res) => {
     try {
-        const result = await pool.query(`
+        const result = await db_1.pool.query(`
       SELECT 
         table_name,
         (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = t.table_name) as column_count
@@ -1650,7 +1544,7 @@ app.get(`${API_PREFIX}/dba/tables/:name`, async (req, res) => {
     try {
         const { name } = req.params;
         // 获取列信息
-        const columnsResult = await pool.query(`
+        const columnsResult = await db_1.pool.query(`
       SELECT 
         column_name,
         data_type,
@@ -1662,7 +1556,7 @@ app.get(`${API_PREFIX}/dba/tables/:name`, async (req, res) => {
       ORDER BY ordinal_position
     `, [name]);
         // 获取索引信息
-        const indexResult = await pool.query(`
+        const indexResult = await db_1.pool.query(`
       SELECT 
         indexname,
         indexdef
@@ -1670,7 +1564,7 @@ app.get(`${API_PREFIX}/dba/tables/:name`, async (req, res) => {
       WHERE schemaname = 'public' AND tablename = $1
     `, [name]);
         // 获取行数
-        const countResult = await pool.query(`SELECT COUNT(*) as count FROM "${name}"`);
+        const countResult = await db_1.pool.query(`SELECT COUNT(*) as count FROM "${name}"`);
         sendSuccess(res, {
             columns: columnsResult.rows,
             indexes: indexResult.rows,
@@ -1707,7 +1601,7 @@ app.post(`${API_PREFIX}/dba/query`, async (req, res) => {
         }
         // 执行查询
         const startTime = Date.now();
-        const result = await pool.query(sql);
+        const result = await db_1.pool.query(sql);
         const elapsed = Date.now() - startTime;
         sendSuccess(res, {
             rows: result.rows,
@@ -1726,17 +1620,17 @@ app.get(`${API_PREFIX}/dba/monitor`, async (req, res) => {
     try {
         // 获取连接池状态
         const poolStats = {
-            total: pool.totalCount,
-            idle: pool.idleCount,
-            waiting: pool.waitingCount
+            total: db_1.pool.totalCount,
+            idle: db_1.pool.idleCount,
+            waiting: db_1.pool.waitingCount
         };
         // 获取数据库大小
-        const dbSizeResult = await pool.query(`
+        const dbSizeResult = await db_1.pool.query(`
       SELECT pg_size_pretty(pg_database_size(current_database())) as size,
              pg_database_size(current_database()) as size_bytes
     `);
         // 获取表统计信息
-        const tableStatsResult = await pool.query(`
+        const tableStatsResult = await db_1.pool.query(`
       SELECT
         schemaname,
         relname as table_name,
@@ -1751,7 +1645,7 @@ app.get(`${API_PREFIX}/dba/monitor`, async (req, res) => {
       LIMIT 20
     `);
         // 获取连接数统计
-        const connectionStatsResult = await pool.query(`
+        const connectionStatsResult = await db_1.pool.query(`
       SELECT count(*) as total_connections,
              count(*) FILTER (WHERE state = 'active') as active_connections,
              count(*) FILTER (WHERE state = 'idle') as idle_connections
@@ -1759,7 +1653,7 @@ app.get(`${API_PREFIX}/dba/monitor`, async (req, res) => {
       WHERE datname = current_database()
     `);
         // 获取索引使用情况
-        const indexStatsResult = await pool.query(`
+        const indexStatsResult = await db_1.pool.query(`
       SELECT
         schemaname,
         relname as table_name,
@@ -1774,7 +1668,7 @@ app.get(`${API_PREFIX}/dba/monitor`, async (req, res) => {
         // 获取数据库级统计（事务、缓冲区命中率等）
         let dbStatResult = null;
         try {
-            dbStatResult = await pool.query(`
+            dbStatResult = await db_1.pool.query(`
         SELECT
           numbackends,
           xact_commit,
@@ -1801,7 +1695,7 @@ app.get(`${API_PREFIX}/dba/monitor`, async (req, res) => {
         // 获取表级 I/O 统计（缓冲区命中/读取）
         let tableIoResult = null;
         try {
-            tableIoResult = await pool.query(`
+            tableIoResult = await db_1.pool.query(`
         SELECT
           schemaname,
           relname as table_name,
@@ -1831,7 +1725,7 @@ app.get(`${API_PREFIX}/dba/monitor`, async (req, res) => {
         // 获取后台写入器统计
         let bgwriterResult = null;
         try {
-            bgwriterResult = await pool.query(`
+            bgwriterResult = await db_1.pool.query(`
         SELECT
           checkpoints_timed,
           checkpoints_req,
@@ -1871,9 +1765,9 @@ app.get(`${API_PREFIX}/dba/monitor`, async (req, res) => {
 app.get(`${API_PREFIX}/dba/info`, async (req, res) => {
     try {
         // 获取 PostgreSQL 版本
-        const versionResult = await pool.query(`SELECT version()`);
+        const versionResult = await db_1.pool.query(`SELECT version()`);
         // 获取一些关键配置参数
-        const configResult = await pool.query(`
+        const configResult = await db_1.pool.query(`
       SELECT name, setting, unit, short_desc
       FROM pg_settings
       WHERE name IN (
@@ -1899,7 +1793,7 @@ app.post(`${API_PREFIX}/dba/vacuum`, async (req, res) => {
             return sendError(res, '请提供表名');
         }
         // 验证表名是否存在，防止 SQL 注入
-        const tableCheck = await pool.query(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1`, [tableName]);
+        const tableCheck = await db_1.pool.query(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1`, [tableName]);
         if (tableCheck.rows.length === 0) {
             return sendError(res, `表 "${tableName}" 不存在`, 404);
         }
@@ -1924,7 +1818,7 @@ app.post(`${API_PREFIX}/dba/vacuum`, async (req, res) => {
         }
         console.log(`[VACUUM] 执行: ${sql}`);
         const startTime = Date.now();
-        await pool.query(sql);
+        await db_1.pool.query(sql);
         const elapsed = Date.now() - startTime;
         sendSuccess(res, {
             message: `${tableName} ${mode} 完成，${description}，耗时 ${elapsed}ms`,
@@ -1954,7 +1848,7 @@ app.listen(Number(PORT), HOST, () => {
 // 优雅关闭
 process.on('SIGTERM', async () => {
     console.log('SIGTERM signal received: closing HTTP server');
-    await pool.end();
+    await db_1.pool.end();
     process.exit(0);
 });
 // 防止未捕获的异常导致进程崩溃

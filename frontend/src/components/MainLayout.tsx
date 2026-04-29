@@ -4,6 +4,7 @@ import { Layout, Typography, Button, Popconfirm, Modal, Form, Input, Select, mes
 import { LogoutOutlined, PlusOutlined } from '@ant-design/icons';
 import Sidebar from './Sidebar';
 import { logout, createCharacter } from '../api';
+import { getApiErrorMessage } from '../utils/errors';
 import './MainLayout.css';
 
 const { Header } = Layout;
@@ -50,7 +51,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ username }) => {
   const handleLogout = async () => {
     try {
       await logout();
-    } catch (e) {
+    } catch {
       // ignore
     }
     window.location.reload();
@@ -87,8 +88,8 @@ const MainLayout: React.FC<MainLayoutProps> = ({ username }) => {
       createForm.resetFields();
       // 触发页面刷新
       window.dispatchEvent(new CustomEvent('characterCreated'));
-    } catch (error: any) {
-      message.error(error.response?.data?.error || '创建失败');
+    } catch (error: unknown) {
+      message.error(getApiErrorMessage(error, '创建失败'));
     } finally {
       setCreating(false);
     }

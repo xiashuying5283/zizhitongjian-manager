@@ -7,6 +7,7 @@ import {
   getParagraphList, getParagraphVolumes, createParagraph, updateParagraph, deleteParagraph
 } from '../api';
 import type { Paragraph, ParagraphGroup } from '../types';
+import { getApiErrorMessage, hasFormValidationError } from '../utils/errors';
 
 const { TextArea } = Input;
 const { Panel } = Collapse;
@@ -62,7 +63,7 @@ const ParagraphsManagement: React.FC = () => {
         setTotal(listResult.total);
         setGroups([]);
       }
-    } catch (error) {
+    } catch {
       message.error('加载失败');
     } finally {
       setLoading(false);
@@ -90,7 +91,7 @@ const ParagraphsManagement: React.FC = () => {
       await deleteParagraph(id);
       message.success('删除成功');
       fetchData();
-    } catch (error) {
+    } catch {
       message.error('删除失败');
     }
   };
@@ -108,11 +109,9 @@ const ParagraphsManagement: React.FC = () => {
       }
       setModalVisible(false);
       fetchData();
-    } catch (error: any) {
-      if (error.response?.data?.error) {
-        message.error(error.response.data.error);
-      } else if (!error.errorFields) {
-        message.error(editingItem ? '更新失败' : '创建失败');
+    } catch (error: unknown) {
+      if (!hasFormValidationError(error)) {
+        message.error(getApiErrorMessage(error, editingItem ? '更新失败' : '创建失败'));
       }
     }
   };
@@ -179,7 +178,7 @@ const ParagraphsManagement: React.FC = () => {
       key: 'action',
       width: 120,
       fixed: 'right' as const,
-      render: (_: any, record: Paragraph) => (
+      render: (_: unknown, record: Paragraph) => (
         <Space>
           <Button
             type="link"

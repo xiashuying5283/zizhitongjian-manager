@@ -11,7 +11,7 @@ const STORAGE_KEY = 'character_management_state';
 const saveState = (state: { letter?: string; q?: string; id?: number; era?: string }) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch (e) {
+  } catch {
     // ignore
   }
 };
@@ -21,7 +21,7 @@ const loadState = (): { letter?: string; q?: string; id?: number; era?: string }
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     return saved ? JSON.parse(saved) : {};
-  } catch (e) {
+  } catch {
     return {};
   }
 };
@@ -38,15 +38,16 @@ const CharacterManagement: React.FC = () => {
   const [initialized, setInitialized] = useState(false);
   const pendingSelectIdRef = useRef<number | null>(null);
 
-  const handleLetterClick = useCallback(async (letter: string, saveToStorage = true) => {
+  const handleLetterClick = useCallback(async (letter: string, saveToStorage = true, eraOverride?: string) => {
+    const eraForQuery = eraOverride ?? eraFilter;
     setCurrentLetter(letter);
     setSearchQuery('');
     if (saveToStorage) {
-      saveState({ letter, era: eraFilter || undefined });
+      saveState({ letter, era: eraForQuery || undefined });
     }
     setLoading(true);
     try {
-      const data = await getCharactersByInitial(letter, eraFilter);
+      const data = await getCharactersByInitial(letter, eraForQuery);
       setGroups(data.groups);
       setTotal(data.total);
     } catch (error) {
@@ -56,11 +57,12 @@ const CharacterManagement: React.FC = () => {
     }
   }, [eraFilter]);
 
-  const handleSearch = useCallback(async (query: string, saveToStorage = true) => {
+  const handleSearch = useCallback(async (query: string, saveToStorage = true, eraOverride?: string) => {
+    const eraForQuery = eraOverride ?? eraFilter;
     setSearchQuery(query);
     setCurrentLetter('');
     if (saveToStorage) {
-      saveState({ q: query || undefined, era: eraFilter || undefined });
+      saveState({ q: query || undefined, era: eraForQuery || undefined });
     }
     if (!query.trim()) {
       setGroups([]);
@@ -69,7 +71,7 @@ const CharacterManagement: React.FC = () => {
     }
     setLoading(true);
     try {
-      const data = await searchCharacters(query, eraFilter);
+      const data = await searchCharacters(query, eraForQuery);
       setGroups([
         {
           pinyin: '搜索结果',
@@ -89,9 +91,9 @@ const CharacterManagement: React.FC = () => {
     setEraFilter(era);
     saveState({ letter: currentLetter || undefined, q: searchQuery || undefined, era: era || undefined });
     if (currentLetter) {
-      handleLetterClick(currentLetter, false);
+      handleLetterClick(currentLetter, false, era);
     } else if (searchQuery) {
-      handleSearch(searchQuery, false);
+      handleSearch(searchQuery, false, era);
     }
   }, [currentLetter, searchQuery, handleLetterClick, handleSearch]);
 
@@ -149,7 +151,7 @@ const CharacterManagement: React.FC = () => {
     // 恢复状态
     if (saved.q) {
       // 恢复搜索
-      handleSearch(saved.q, false).then(() => {
+      handleSearch(saved.q, false, saved.era || '').then(() => {
         if (saved.id) {
           setSelectedId(saved.id);
           setPanelVisible(true);
@@ -158,7 +160,7 @@ const CharacterManagement: React.FC = () => {
     } else {
       // 恢复或默认字母
       const letter = saved.letter || 'A';
-      handleLetterClick(letter, false).then(() => {
+      handleLetterClick(letter, false, saved.era || '').then(() => {
         if (saved.id) {
           setSelectedId(saved.id);
           setPanelVisible(true);

@@ -1,12 +1,13 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import { Pool, QueryResult } from 'pg';
+import { QueryResult } from 'pg';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import path from 'path';
 import { pinyin } from 'pinyin-pro';
-import crypto from 'crypto';
+import { pool, startPoolHealthCheck } from './db';
+import { authMiddleware, registerAuthRoutes } from './auth';
 
 // 加载环境变量
 dotenv.config();
@@ -15,44 +16,13 @@ const app = express();
 const PORT = process.env.PORT || 9092;
 const HOST = process.env.HOST || '0.0.0.0';
 
-// 登录配置
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
-const COOKIE_MAX_AGE = 24 * 60 * 60 * 1000; // 24 小时
-
 // OpenAI 客户端初始化
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || '',
   baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
 });
 
-// 数据库连接
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  },
-  max: 5,
-  idleTimeoutMillis: 60000,       // 空闲 60 秒再释放，避免被远端断开
-  connectionTimeoutMillis: 10000,
-  keepAlive: true,
-  keepAliveInitialDelayMillis: 5000,
-});
-
-// 监听连接池错误，防止单个连接异常导致进程崩溃
-pool.on('error', (err) => {
-  console.error('[数据库连接池错误]', err.message);
-});
-
-// 定期健康检查，探测并淘汰死连接
-setInterval(async () => {
-  try {
-    await pool.query('SELECT 1');
-  } catch (e) {
-    console.error('[数据库健康检查失败]', (e as Error).message);
-  }
-}, 30000);
+startPoolHealthCheck();
 
 // 中间件
 app.use(cors({
@@ -61,44 +31,6 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(cookieParser());
-
-// 生成 session token
-function generateToken(): string {
-  return crypto.randomBytes(32).toString('hex');
-}
-
-// 简单的 session 存储（生产环境建议用 Redis）
-const sessions = new Map<string, { username: string; expires: number }>();
-
-// 清理过期 session
-setInterval(() => {
-  const now = Date.now();
-  for (const [token, session] of sessions) {
-    if (session.expires < now) {
-      sessions.delete(token);
-    }
-  }
-}, 60 * 60 * 1000); // 每小时清理一次
-
-// 认证中间件
-const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
-  const token = req.cookies.session_token;
-  
-  if (!token) {
-    return res.status(401).json({ success: false, error: '未登录', code: 'UNAUTHORIZED' });
-  }
-
-  const session = sessions.get(token);
-  if (!session || session.expires < Date.now()) {
-    sessions.delete(token);
-    return res.status(401).json({ success: false, error: '登录已过期', code: 'UNAUTHORIZED' });
-  }
-
-  // 续期 session
-  session.expires = Date.now() + COOKIE_MAX_AGE;
-  (req as any).user = { username: session.username };
-  next();
-};
 
 // API 路由前缀
 const API_PREFIX = '/api';
@@ -113,62 +45,7 @@ function sendError(res: Response, message: string, statusCode = 400) {
   res.status(statusCode).json({ success: false, error: message });
 }
 
-// 登录接口（无需认证）
-app.post(`${API_PREFIX}/login`, (req: Request, res: Response) => {
-  const { username, password } = req.body;
-
-  if (!username || !password) {
-    return sendError(res, '用户名和密码不能为空');
-  }
-
-  if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
-    console.log(`[登录失败] 用户名或密码错误: ${username}`);
-    return sendError(res, '用户名或密码错误', 401);
-  }
-
-  const token = generateToken();
-  sessions.set(token, {
-    username,
-    expires: Date.now() + COOKIE_MAX_AGE
-  });
-
-  res.cookie('session_token', token, {
-    httpOnly: true,
-    maxAge: COOKIE_MAX_AGE,
-    sameSite: 'strict',
-    secure: process.env.NODE_ENV === 'production'
-  });
-
-  console.log(`[登录成功] ${username}`);
-  sendSuccess(res, { username, message: '登录成功' });
-});
-
-// 登出接口
-app.post(`${API_PREFIX}/logout`, (req: Request, res: Response) => {
-  const token = req.cookies.session_token;
-  if (token) {
-    sessions.delete(token);
-  }
-  res.clearCookie('session_token');
-  sendSuccess(res, { message: '已登出' });
-});
-
-// 检查登录状态
-app.get(`${API_PREFIX}/check-auth`, (req: Request, res: Response) => {
-  const token = req.cookies.session_token;
-  
-  if (!token) {
-    return sendSuccess(res, { authenticated: false });
-  }
-
-  const session = sessions.get(token);
-  if (!session || session.expires < Date.now()) {
-    sessions.delete(token);
-    return sendSuccess(res, { authenticated: false });
-  }
-
-  sendSuccess(res, { authenticated: true, username: session.username });
-});
+registerAuthRoutes(app, API_PREFIX, sendSuccess, sendError);
 
 // ============ 维基百科代理接口（无需认证） ============
 
@@ -1588,28 +1465,28 @@ app.post(`${API_PREFIX}/characters/enrich-from-tongjian`, async (req: Request, r
 
 // 4. 确认写入
 app.post(`${API_PREFIX}/characters/enrich-confirm`, async (req: Request, res: Response) => {
+  const { 
+    characterId, 
+    name, 
+    era, 
+    title, 
+    hometown, 
+    aliases, 
+    summary,
+    birth_year,
+    death_year,
+    relationships,
+    createMissing = false  // 是否自动创建不存在的人物
+  } = req.body;
+
+  if (!characterId) {
+    return sendError(res, 'characterId 不能为空');
+  }
+
   const client = await pool.connect();
   
   try {
     await client.query('BEGIN');
-    
-    const { 
-      characterId, 
-      name, 
-      era, 
-      title, 
-      hometown, 
-      aliases, 
-      summary,
-      birth_year,
-      death_year,
-      relationships,
-      createMissing = false  // 是否自动创建不存在的人物
-    } = req.body;
-
-    if (!characterId) {
-      return sendError(res, 'characterId 不能为空');
-    }
 
     // 更新人物信息
     const updateFields: string[] = [];
@@ -1797,24 +1674,21 @@ app.delete(`${API_PREFIX}/characters/:id/relations/:relationId`, async (req: Req
 
 // 5. 删除人物
 app.delete(`${API_PREFIX}/characters/:id`, async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const charResult: QueryResult = await pool.query(
+    `SELECT name FROM characters WHERE id = $1`,
+    [id]
+  );
+
+  if (charResult.rows.length === 0) {
+    return sendError(res, '人物不存在', 404);
+  }
+
+  const name = charResult.rows[0].name;
   const client = await pool.connect();
   
   try {
     await client.query('BEGIN');
-    
-    const { id } = req.params;
-
-    // 查询人物信息
-    const charResult: QueryResult = await client.query(
-      `SELECT name FROM characters WHERE id = $1`,
-      [id]
-    );
-
-    if (charResult.rows.length === 0) {
-      return sendError(res, '人物不存在', 404);
-    }
-
-    const name = charResult.rows[0].name;
 
     // 删除该人物发出的关系
     await client.query(

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Drawer,
   Form,
@@ -27,6 +27,7 @@ import {
   getWikiBaike,
 } from '../api';
 import type { BaikeResult, WikiResult } from '../api';
+import { getApiErrorMessage } from '../utils/errors';
 import './EditPanel.css';
 
 const { TextArea } = Input;
@@ -94,13 +95,7 @@ const EditPanel: React.FC<EditPanelProps> = ({
   const [wikiResult, setWikiResult] = useState<WikiResult | null>(null);
   const [wikiError, setWikiError] = useState('');
 
-  useEffect(() => {
-    if (visible && characterId) {
-      loadCharacter();
-    }
-  }, [visible, characterId]);
-
-  const loadCharacter = async () => {
+  const loadCharacter = useCallback(async () => {
     if (!characterId) return;
     setLoading(true);
     try {
@@ -134,12 +129,18 @@ const EditPanel: React.FC<EditPanelProps> = ({
       setRelations(allRelations);
       setBaiduQuery(data.name);
       setWikiQuery(data.name);
-    } catch (error) {
+    } catch {
       message.error('加载人物详情失败');
     } finally {
       setLoading(false);
     }
-  };
+  }, [characterId, form]);
+
+  useEffect(() => {
+    if (visible && characterId) {
+      loadCharacter();
+    }
+  }, [visible, characterId, loadCharacter]);
 
   const handleAiGenerate = async () => {
     if (!character) return;
@@ -177,8 +178,8 @@ const EditPanel: React.FC<EditPanelProps> = ({
       message.success('AI 生成完成');
       setHintModalVisible(false);
       setUserHint('');
-    } catch (error: any) {
-      message.error(error.response?.data?.error || 'AI 生成失败');
+    } catch (error: unknown) {
+      message.error(getApiErrorMessage(error, 'AI 生成失败'));
     } finally {
       setAiLoading(false);
     }
@@ -240,8 +241,8 @@ const EditPanel: React.FC<EditPanelProps> = ({
       message.success('保存成功');
       onSuccess(true);  // 保持选中状态
       onClose();
-    } catch (error: any) {
-      const errorMsg = error.response?.data?.error || '保存失败';
+    } catch (error: unknown) {
+      const errorMsg = getApiErrorMessage(error, '保存失败');
       
       // 解析缺失人物
       const match = errorMsg.match(/以下关联人物不存在：(.+)/);
@@ -284,7 +285,7 @@ const EditPanel: React.FC<EditPanelProps> = ({
           message.success('删除成功');
           onSuccess();
           onClose();
-        } catch (error) {
+        } catch {
           message.error('删除失败');
         }
       },
@@ -380,8 +381,8 @@ const EditPanel: React.FC<EditPanelProps> = ({
                     try {
                       const data = await getBaiduBaike(value.trim());
                       setBaiduResult(data);
-                    } catch (err: any) {
-                      setBaiduError(err.response?.data?.error || '查询失败');
+                    } catch (err: unknown) {
+                      setBaiduError(getApiErrorMessage(err, '查询失败'));
                     } finally {
                       setBaiduLoading(false);
                     }
@@ -404,8 +405,8 @@ const EditPanel: React.FC<EditPanelProps> = ({
                         try {
                           const data = await getBaiduBaike(baiduQuery.trim());
                           setBaiduResult(data);
-                        } catch (err: any) {
-                          setBaiduError(err.response?.data?.error || '查询失败');
+                        } catch (err: unknown) {
+                          setBaiduError(getApiErrorMessage(err, '查询失败'));
                         } finally {
                           setBaiduLoading(false);
                         }
@@ -493,8 +494,8 @@ const EditPanel: React.FC<EditPanelProps> = ({
                     try {
                       const data = await getWikiBaike(value.trim());
                       setWikiResult(data);
-                    } catch (err: any) {
-                      setWikiError(err.response?.data?.error || '查询失败，可能无法连接维基百科');
+                    } catch (err: unknown) {
+                      setWikiError(getApiErrorMessage(err, '查询失败，可能无法连接维基百科'));
                     } finally {
                       setWikiLoading(false);
                     }
@@ -517,8 +518,8 @@ const EditPanel: React.FC<EditPanelProps> = ({
                         try {
                           const data = await getWikiBaike(wikiQuery.trim());
                           setWikiResult(data);
-                        } catch (err: any) {
-                          setWikiError(err.response?.data?.error || '查询失败');
+                        } catch (err: unknown) {
+                          setWikiError(getApiErrorMessage(err, '查询失败'));
                         } finally {
                           setWikiLoading(false);
                         }

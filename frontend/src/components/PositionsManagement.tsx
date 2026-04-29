@@ -54,7 +54,7 @@ const PositionsManagement: React.FC = () => {
       });
       setData(result.positions);
       setTotal(result.total);
-    } catch (error) {
+    } catch {
       message.error('加载失败');
     } finally {
       setLoading(false);
@@ -85,7 +85,7 @@ const PositionsManagement: React.FC = () => {
       await deletePosition(id);
       message.success('删除成功');
       fetchData();
-    } catch (error) {
+    } catch {
       message.error('删除失败');
     }
   };
@@ -106,7 +106,7 @@ const PositionsManagement: React.FC = () => {
       }
       setModalVisible(false);
       fetchData();
-    } catch (error) {
+    } catch {
       message.error(editingItem ? '更新失败' : '创建失败');
     }
   };
@@ -156,7 +156,7 @@ const PositionsManagement: React.FC = () => {
       title: '操作',
       key: 'action',
       width: 120,
-      render: (_: any, record: Position) => (
+      render: (_: unknown, record: Position) => (
         <Space>
           <Button
             type="link"

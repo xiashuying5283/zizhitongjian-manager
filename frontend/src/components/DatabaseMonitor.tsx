@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, Row, Col, Statistic, Table, Tag, Button, Switch, Empty, Alert, message, Tooltip, Popconfirm, Typography, Progress } from 'antd';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
@@ -9,6 +9,7 @@ import {
   WarningOutlined, CloudServerOutlined, ThunderboltOutlined
 } from '@ant-design/icons';
 import { getDbMonitorInfo, getDbInfo, vacuumTable } from '../api';
+import type { DbInfo, DbMonitorInfo } from '../types';
 import './DatabaseMonitor.css';
 
 const { Text } = Typography;
@@ -24,6 +25,10 @@ const formatPieLabel = ({ name, percent }: { name?: string; percent?: number }) 
 const formatPercentTooltip = (value: unknown) => `${Number(value ?? 0).toFixed(2)}%`;
 const formatChartTime = (timestamp: number) =>
   new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const getErrorMessage = (error: unknown, fallback: string) =>
+  error instanceof Error ? error.message : fallback;
+const getApiErrorMessage = (error: unknown, fallback: string) =>
+  (error as { response?: { data?: { error?: string } } })?.response?.data?.error || fallback;
 
 const getIoHealth = (hitRatio: number, readBlocks: number) => {
   if (readBlocks >= 10000 && hitRatio < 90) {
@@ -53,91 +58,6 @@ const CONFIG_DESCRIPTIONS: Record<string, string> = {
   wal_buffers: '写入 WAL 日志前使用的缓冲区大小。写入量较高时，合适的缓冲区有助于减少 WAL 写入压力。',
 };
 
-interface MonitorData {
-  pool: {
-    total: number;
-    idle: number;
-    waiting: number;
-  };
-  database: {
-    name: string;
-    size: string;
-    size_bytes: number;
-  };
-  connections: {
-    total_connections: number;
-    active_connections: number;
-    idle_connections: number;
-  };
-  tables: Array<{
-    schemaname: string;
-    table_name: string;
-    live_rows: number;
-    dead_rows: number;
-    last_vacuum: string | null;
-    last_autovacuum: string | null;
-    last_analyze: string | null;
-    total_size: string;
-  }>;
-  indexes: Array<{
-    schemaname: string;
-    table_name: string;
-    index_name: string;
-    index_scans: number;
-    tuples_read: number;
-    tuples_fetched: number;
-  }>;
-  dbStat: {
-    numbackends: number;
-    xact_commit: number;
-    xact_rollback: number;
-    blks_read: number;
-    blks_hit: number;
-    cache_hit_ratio: number;
-    tup_returned: number;
-    tup_fetched: number;
-    tup_inserted: number;
-    tup_updated: number;
-    tup_deleted: number;
-    conflicts: number;
-    deadlocks: number;
-  } | null;
-  tableIo: Array<{
-    schemaname: string;
-    table_name: string;
-    heap_blks_read: number;
-    heap_blks_hit: number;
-    heap_hit_ratio: number;
-    idx_blks_read: number;
-    idx_blks_hit: number;
-    idx_hit_ratio: number;
-    toast_blks_read: number;
-    toast_blks_hit: number;
-    tidx_blks_read: number;
-    tidx_blks_hit: number;
-  }>;
-  bgwriter: {
-    checkpoints_timed: number;
-    checkpoints_req: number;
-    req_checkpoint_ratio: number;
-    buffers_clean: number;
-    buffers_backend: number;
-    buffers_alloc: number;
-    buffers_checkpoint: number;
-  } | null;
-  timestamp: string;
-}
-
-interface DbInfo {
-  version: string;
-  config: Array<{
-    name: string;
-    setting: string;
-    unit: string | null;
-    short_desc: string;
-  }>;
-}
-
 // 历史数据点
 interface HistoryPoint {
   time: string;
@@ -151,8 +71,20 @@ interface HistoryPoint {
   rollbackRate: number;
 }
 
+type TableIoRow = DbMonitorInfo['tableIo'][number];
+type TableHealthRow = {
+  name: string;
+  liveRows: number;
+  deadRows: number;
+  totalSize: string;
+  fragmentation: number;
+  lastVacuum: string | null;
+  lastAnalyze: string | null;
+  needsVacuum: boolean;
+};
+
 const DatabaseMonitor: React.FC = () => {
-  const [monitorData, setMonitorData] = useState<MonitorData | null>(null);
+  const [monitorData, setMonitorData] = useState<DbMonitorInfo | null>(null);
   const [dbInfo, setDbInfo] = useState<DbInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -171,19 +103,20 @@ const DatabaseMonitor: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   // 上一次的事务提交数（用于计算 TPS）
-  const [prevXactCommit, setPrevXactCommit] = useState<number | null>(null);
-  const [prevTimestamp, setPrevTimestamp] = useState<number | null>(null);
+  const prevXactCommitRef = useRef<number | null>(null);
+  const prevTimestampRef = useRef<number | null>(null);
+
+  const loadDbInfo = useCallback(async () => {
+    const info = await getDbInfo();
+    setDbInfo(info);
+  }, []);
 
   // 加载监控数据
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setError(null);
-      const [monitor, info] = await Promise.all([
-        getDbMonitorInfo(),
-        getDbInfo()
-      ]);
+      const monitor = await getDbMonitorInfo();
       setMonitorData(monitor);
-      setDbInfo(info);
 
       // 更新历史数据
       const now = new Date();
@@ -192,16 +125,16 @@ const DatabaseMonitor: React.FC = () => {
 
       // 计算 TPS（每秒事务数）
       let tps = 0;
-      if (prevXactCommit !== null && prevTimestamp !== null && monitor.dbStat) {
-        const xactDelta = monitor.dbStat.xact_commit - prevXactCommit;
-        const timeDelta = (nowMs - prevTimestamp) / 1000;
+      if (prevXactCommitRef.current !== null && prevTimestampRef.current !== null && monitor.dbStat) {
+        const xactDelta = monitor.dbStat.xact_commit - prevXactCommitRef.current;
+        const timeDelta = (nowMs - prevTimestampRef.current) / 1000;
         if (timeDelta > 0 && xactDelta >= 0) {
           tps = Math.round(xactDelta / timeDelta * 10) / 10;
         }
       }
       if (monitor.dbStat) {
-        setPrevXactCommit(monitor.dbStat.xact_commit);
-        setPrevTimestamp(nowMs);
+        prevXactCommitRef.current = monitor.dbStat.xact_commit;
+        prevTimestampRef.current = nowMs;
       }
 
       // 回滚率
@@ -228,15 +161,18 @@ const DatabaseMonitor: React.FC = () => {
         localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(newData));
         return newData;
       });
-    } catch (err: any) {
-      setError(err.message || '加载监控数据失败');
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, '加载监控数据失败'));
     }
-  };
+  }, []);
 
   // 初始加载
   useEffect(() => {
+    loadDbInfo().catch((err: unknown) => {
+      setError(getErrorMessage(err, '加载数据库配置失败'));
+    });
     loadData();
-  }, []);
+  }, [loadData, loadDbInfo]);
 
   // 自动刷新
   useEffect(() => {
@@ -245,7 +181,7 @@ const DatabaseMonitor: React.FC = () => {
       loadData();
     }, REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [autoRefresh]);
+  }, [autoRefresh, loadData]);
 
   // 刷新按钮
   const handleRefresh = () => {
@@ -517,7 +453,7 @@ const DatabaseMonitor: React.FC = () => {
             </span>
           );
         },
-        sorter: (a: any, b: any) => a.heap_hit_ratio - b.heap_hit_ratio,
+        sorter: (a: TableIoRow, b: TableIoRow) => a.heap_hit_ratio - b.heap_hit_ratio,
       },
       {
         title: '堆块磁盘读',
@@ -528,14 +464,14 @@ const DatabaseMonitor: React.FC = () => {
             {v.toLocaleString()}
           </span>
         ),
-        sorter: (a: any, b: any) => a.heap_blks_read - b.heap_blks_read,
+        sorter: (a: TableIoRow, b: TableIoRow) => a.heap_blks_read - b.heap_blks_read,
       },
       {
         title: '堆块缓存读',
         dataIndex: 'heap_blks_hit',
         width: 100,
         render: (v: number) => v.toLocaleString(),
-        sorter: (a: any, b: any) => a.heap_blks_hit - b.heap_blks_hit,
+        sorter: (a: TableIoRow, b: TableIoRow) => a.heap_blks_hit - b.heap_blks_hit,
       },
       {
         title: '索引命中率',
@@ -549,7 +485,7 @@ const DatabaseMonitor: React.FC = () => {
             </span>
           );
         },
-        sorter: (a: any, b: any) => a.idx_hit_ratio - b.idx_hit_ratio,
+        sorter: (a: TableIoRow, b: TableIoRow) => a.idx_hit_ratio - b.idx_hit_ratio,
       },
       {
         title: '索引磁盘读',
@@ -560,7 +496,7 @@ const DatabaseMonitor: React.FC = () => {
             {v.toLocaleString()}
           </span>
         ),
-        sorter: (a: any, b: any) => a.idx_blks_read - b.idx_blks_read,
+        sorter: (a: TableIoRow, b: TableIoRow) => a.idx_blks_read - b.idx_blks_read,
       },
       {
         title: '索引缓存读',
@@ -860,8 +796,8 @@ const DatabaseMonitor: React.FC = () => {
       message.success(result.message || `${tableName} ${mode} 操作成功`);
       // 刷新监控数据
       await loadData();
-    } catch (err: any) {
-      message.error(err?.response?.data?.error || `${mode} 操作失败`);
+    } catch (err: unknown) {
+      message.error(getApiErrorMessage(err, `${mode} 操作失败`));
     } finally {
       setVacuumLoading(null);
     }
@@ -869,7 +805,7 @@ const DatabaseMonitor: React.FC = () => {
 
   // 表健康度/碎片率
   const renderTableHealth = () => {
-    const healthData = monitorData?.tables?.slice(0, 15).map(t => {
+    const healthData: TableHealthRow[] = monitorData?.tables?.slice(0, 15).map(t => {
       const liveRows = t.live_rows || 0;
       const deadRows = t.dead_rows || 0;
       const totalRows = liveRows + deadRows;
@@ -955,7 +891,7 @@ const DatabaseMonitor: React.FC = () => {
       {
         title: '健康状态',
         width: 90,
-        render: (_: any, record: { needsVacuum: boolean; deadRows: number; fragmentation: number }) => (
+        render: (_: unknown, record: TableHealthRow) => (
           record.needsVacuum ? (
             <Tag color={record.deadRows > 10000 || record.fragmentation > 50 ? 'error' : 'warning'}>
               {record.deadRows > 10000 || record.fragmentation > 50 ? '需优化' : '轻微碎片'}
@@ -969,7 +905,7 @@ const DatabaseMonitor: React.FC = () => {
         title: '操作',
         width: 200,
         fixed: 'right' as const,
-        render: (_: any, record: { name: string; needsVacuum: boolean; fragmentation: number; deadRows: number }) => {
+        render: (_: unknown, record: TableHealthRow) => {
           const showVacuumFull = record.fragmentation > 50 || record.deadRows > 10000;
 
           return (
