@@ -13,4 +13,8 @@ yarn-error.log*
 .env
 .env.local
 
+# 本地提示词/部署笔记
+DEPLOY.md
+prompt-for-web-admin.md
+
 .vscode/*

@@ -29,7 +29,7 @@ const openai = new OpenAI({
 
 // 数据库连接
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:ncG6Y6Gyb776OPdd7F@cp-loyal-storm-19a3b2eb.pg5.aidap-global.cn-beijing.volces.com:5432/postgres?sslmode=require&channel_binding=require',
+  connectionString: process.env.DATABASE_URL,
   ssl: {
     rejectUnauthorized: false
   },
